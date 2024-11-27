@@ -18,11 +18,11 @@ https://book.getfoundry.sh/
 ### Libraries
 
 ```shell
-forge install uniswap/v4-periphery
-```
-
-```shell
 forge install foundry-rs/forge-std
+forge install uniswap/v4-core
+forge install uniswap/v4-periphery
+forge install openzeppelin/openzeppelin-contracts
+forge install solmate/solmate
 ```
 
 ### Build
