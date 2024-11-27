@@ -1,6 +1,6 @@
 ## PoolPartyDynamicShieldHook
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+**The PoolPartyDynamicShieldHook project introduces dynamic, customizable logic to Uniswap liquidity pools by leveraging Uniswap v4's hook system. The goal is to provide advanced control and monitoring during swaps, enabling features like dynamic shielding, access control, or additional security layers for liquidity providers and traders.**
 
 Foundry consists of:
 
@@ -14,6 +14,16 @@ Foundry consists of:
 https://book.getfoundry.sh/
 
 ## Usage
+
+### Libraries
+
+```shell
+forge install uniswap/v4-periphery
+```
+
+```shell
+forge install foundry-rs/forge-std
+```
 
 ### Build
 
