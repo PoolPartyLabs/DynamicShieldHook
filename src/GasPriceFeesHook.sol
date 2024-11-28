@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.26;
 
 import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
@@ -8,10 +8,12 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 
 contract GasPriceFeesHook is BaseHook {
     using LPFeeLibrary for uint24;
 
+    mapping(PoolId poolId => int24 lastTick) public lastTicks;
     // Keeping track of the moving average gas price
     uint128 public movingAverageGasPrice;
     // How many times has the moving average been updated?
@@ -65,6 +67,15 @@ contract GasPriceFeesHook is BaseHook {
         return this.beforeInitialize.selector;
     }
 
+    function afterInitialize(
+        address,
+        PoolKey calldata key,
+        uint160,
+        int24 tick
+    ) external override onlyPoolManager returns (bytes4) {
+        lastTicks[key.toId()] = tick;
+        return this.afterInitialize.selector;
+    }
     function beforeSwap(
         address,
         PoolKey calldata key,
