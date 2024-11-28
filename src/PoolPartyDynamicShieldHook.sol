@@ -16,10 +16,14 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 
 import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 
 contract PoolPartyDynamicShieldHook is BaseHook, ERC1155 {
+    using LPFeeLibrary for uint24;
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -35,6 +39,17 @@ contract PoolPartyDynamicShieldHook is BaseHook, ERC1155 {
     mapping(uint256 positionId => uint256 claimsSupply)
         public claimTokensSupply;
 
+    // Keeping track of the moving average gas price
+    uint128 public movingAverageGasPrice;
+    // How many times has the moving average been updated?
+    // Needed as the denominator to update it the next time based on the moving average formula
+    uint104 public movingAverageGasPriceCount;
+
+    // The default base fees we will charge
+    uint24 public constant BASE_FEE = 5000; // denominated in pips (one-hundredth bps) 0.5%
+
+    error MustUseDynamicFee();
+
     // Errors
     error InvalidOrder();
     error NothingToClaim();
@@ -44,7 +59,9 @@ contract PoolPartyDynamicShieldHook is BaseHook, ERC1155 {
     constructor(
         IPoolManager _manager,
         string memory _uri
-    ) BaseHook(_manager) ERC1155(_uri) {}
+    ) BaseHook(_manager) ERC1155(_uri) {
+        updateMovingAverage();
+    }
 
     // BaseHook Functions
     function getHookPermissions()
@@ -72,6 +89,17 @@ contract PoolPartyDynamicShieldHook is BaseHook, ERC1155 {
             });
     }
 
+    function beforeInitialize(
+        address,
+        PoolKey calldata key,
+        uint160
+    ) external pure override returns (bytes4) {
+        // `.isDynamicFee()` function comes from using
+        // the `SwapFeeLibrary` for `uint24`
+        if (!key.fee.isDynamicFee()) revert MustUseDynamicFee();
+        return this.beforeInitialize.selector;
+    }
+
     function afterInitialize(
         address,
         PoolKey calldata key,
@@ -80,6 +108,28 @@ contract PoolPartyDynamicShieldHook is BaseHook, ERC1155 {
     ) external override onlyPoolManager returns (bytes4) {
         lastTicks[key.toId()] = tick;
         return this.afterInitialize.selector;
+    }
+
+    function beforeSwap(
+        address,
+        PoolKey calldata key,
+        IPoolManager.SwapParams calldata,
+        bytes calldata
+    )
+        external
+        override
+        onlyPoolManager
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        uint24 fee = getFee();
+        //Check this function
+        poolManager.updateDynamicLPFee(key, fee);
+        uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
+        return (
+            this.beforeSwap.selector,
+            BeforeSwapDeltaLibrary.ZERO_DELTA,
+            feeWithFlag
+        );
     }
 
     function afterSwap(
@@ -396,5 +446,33 @@ contract PoolPartyDynamicShieldHook is BaseHook, ERC1155 {
         // actual usable tick, then, is intervals * tickSpacing
         // i.e. -2 * 60 = -120
         return intervals * tickSpacing;
+    }
+
+    function getFee() internal view returns (uint24) {
+        uint128 gasPrice = uint128(tx.gasprice);
+
+        // if gasPrice > movingAverageGasPrice * 1.1, then half the fees
+        if (gasPrice > (movingAverageGasPrice * 11) / 10) {
+            return BASE_FEE / 2;
+        }
+
+        // if gasPrice < movingAverageGasPrice * 0.9, then double the fees
+        if (gasPrice < (movingAverageGasPrice * 9) / 10) {
+            return BASE_FEE * 2;
+        }
+
+        return BASE_FEE;
+    }
+
+    // Update our moving average gas price
+    function updateMovingAverage() internal {
+        uint128 gasPrice = uint128(tx.gasprice);
+
+        // New Average = ((Old Average * # of Txns Tracked) + Current Gas Price) / (# of Txns Tracked + 1)
+        movingAverageGasPrice =
+            ((movingAverageGasPrice * movingAverageGasPriceCount) + gasPrice) /
+            (movingAverageGasPriceCount + 1);
+
+        movingAverageGasPriceCount++;
     }
 }
