@@ -1,21 +1,34 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {PositionInfo, PositionInfoLibrary} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-core/libraries/SqrtPriceMath.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
+import {PoolVaultManager} from "./PoolVaultManager.sol";
 
 contract PoolPartyDynamicShieldHook is BaseHook {
+    IPositionManager s_positionManager;
+    PoolVaultManager s_vaultManager;
     mapping(bytes32 => ShieldInfo) public shieldInfos;
     mapping(bytes32 => int24) public lastTicks;
     mapping(bytes32 => uint24) public lastFees;
+
+    struct CallData {
+        PoolKey key;
+        uint24 feeInit;
+        uint24 feeMax;
+        TickSpacing tickSpacing;
+    }
 
     enum TickSpacing {
         Low, // 10
@@ -30,8 +43,18 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         uint256 tokenId; // Associated token ID
     }
 
+    // Errors
+    error InvalidPositionManager();
+    error InvalidSelf();
+
     // Initialize BaseHook parent contract in the constructor
-    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+    constructor(
+        IPoolManager _poolManager,
+        IPositionManager _positionManager
+    ) BaseHook(_poolManager) {
+        s_positionManager = _positionManager;
+        s_vaultManager = new PoolVaultManager(address(this), _positionManager);
+    }
 
     // Required override function for BaseHook to let the PoolManager know which hooks are implemented
     function getHookPermissions()
@@ -61,26 +84,31 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
     // Function to generate a hash for a PoolKey
     function getPoolKeyHash(
-        PoolKey calldata poolKey
+        PoolKey memory poolKey
     ) public pure returns (bytes32) {
         return keccak256(abi.encode(poolKey.currency0, poolKey.currency1));
     }
 
-    //TODO: Check if initialize parameters is ok
     function initializeShieldTokenHolder(
-        PoolKey calldata poolKey,
-        TickSpacing tickSpacing,
-        uint24 feeInit,
-        uint24 feeMax,
-        uint256 tokenId
+        PoolKey calldata _poolKey,
+        TickSpacing _tickSpacing,
+        uint24 _feeInit,
+        uint24 _feeMax,
+        uint256 _tokenId
     ) external {
-        bytes32 keyHash = getPoolKeyHash(poolKey);
-        shieldInfos[keyHash] = ShieldInfo({
-            tickSpacing: tickSpacing,
-            feeInit: feeInit,
-            feeMax: feeMax,
-            tokenId: tokenId
-        });
+        IERC721(address(s_positionManager)).safeTransferFrom(
+            msg.sender,
+            address(this),
+            _tokenId,
+            abi.encode(
+                CallData({
+                    key: _poolKey,
+                    feeInit: _feeInit,
+                    feeMax: _feeMax,
+                    tickSpacing: _tickSpacing
+                })
+            )
+        );
     }
 
     function beforeSwap(
@@ -113,6 +141,35 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         bytes calldata
     ) external pure override returns (bytes4, int128) {
         return (this.afterSwap.selector, 0);
+    }
+
+
+    function onERC721Received(
+        address _operator,
+        address _from,
+        uint256 _tokenId,
+        bytes calldata _data
+    ) external returns (bytes4) {
+        // Check if the sender is the position manager
+        if (msg.sender != address(s_positionManager)) revert InvalidPositionManager();
+        if (_operator != address(this)) revert InvalidSelf();
+
+        CallData memory data = abi.decode(_data, (CallData));
+        
+        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(_tokenId); 
+ 
+        bytes32 keyHash = getPoolKeyHash(data.key);
+        shieldInfos[keyHash] = ShieldInfo({
+            tickSpacing: data.tickSpacing,
+            feeInit: data.feeInit,
+            feeMax: data.feeMax,
+            tokenId: _tokenId
+        });
+
+        IERC721(address(s_positionManager)).approve(address(s_vaultManager), _tokenId);
+        s_vaultManager.depositPosition(data.key, _tokenId, _from);
+
+        return this.onERC721Received.selector;
     }
 
     function getFee(
