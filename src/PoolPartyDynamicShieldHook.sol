@@ -31,12 +31,6 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         TickSpacing tickSpacing;
     }
 
-    enum TickSpacing {
-        Low, // 10
-        Medium, // 50
-        High // 200
-    }
-
     struct ShieldInfo {
         TickSpacing tickSpacing; // Enum for tick space
         uint24 feeInit; // Minimum fee
@@ -44,9 +38,26 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         uint256 tokenId; // Associated token ID
     }
 
+    enum TickSpacing {
+        Low, // 10
+        Medium, // 50
+        High // 200
+    }
+
     // Errors
     error InvalidPositionManager();
     error InvalidSelf();
+
+    //Events
+    event TickEvent(PoolId poolId, int24 currentTick);
+
+    // Event to register Shield information
+    event RegisterShieldEvent(
+        PoolId poolId,
+        uint24 feeMax,
+        uint256 tokenId,
+        address holder
+    );
 
     // Initialize BaseHook parent contract in the constructor
     constructor(
@@ -133,16 +144,30 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
     function afterSwap(
         address,
-        PoolKey calldata,
+        PoolKey calldata _poolKey,
         IPoolManager.SwapParams calldata,
         BalanceDelta,
         bytes calldata
     ) external override returns (bytes4, int128) {
         //TODO Check events/parameters and if it should be here.
-        //Get last tick
-        //Emit tick event
-        //Get Shield
-        //Emit Register Shield event  (FeeMax, TokenHold, TokenId)
+        // Get last tick
+        PoolId poolId = PoolIdLibrary.toId(_poolKey);
+        int24 lastTick = lastTicks[poolId];
+
+        // Emit tick event
+        emit TickEvent(poolId, lastTick);
+
+        // Get ShieldInfo for the current pool
+        ShieldInfo memory shieldInfo = shieldInfos[poolId];
+
+        // Emit Register Shield event (FeeMax, TokenHold, TokenId)
+        emit RegisterShieldEvent(
+            poolId,
+            shieldInfo.feeMax,
+            shieldInfo.tokenId,
+            msg.sender // The operator who initiated the swap
+        );
+
         return (this.afterSwap.selector, 0);
     }
 
