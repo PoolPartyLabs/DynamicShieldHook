@@ -196,7 +196,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         );
 
         // Calculate tickLower and tickUpper
-        int24 tickLower = (currentTick / tickSpacing) * tickSpacing; // Round down to nearest tick spacing
+        int24 tickLower = tickSpacing * (currentTick / tickSpacing);
         int24 tickUpper = tickLower + tickSpacing; // Next tick boundary
 
         // Calculate totalTicks (absolute difference between tickUpper and tickLower)
