@@ -15,6 +15,7 @@ import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-core/libraries/SqrtPriceMath.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {PoolVaultManager} from "./PoolVaultManager.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 
 contract PoolPartyDynamicShieldHook is BaseHook {
     IPositionManager s_positionManager;
@@ -115,8 +116,12 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         onlyPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        //TODO: Check if params.sqrtPriceLimitX96 represent current sqrtPrice
-        uint24 fee = getFee(poolKey, params.sqrtPriceLimitX96);
+        PoolId poolId = PoolIdLibrary.toId(poolKey);
+        (uint160 currentSqrtPriceX96, , , ) = StateLibrary.getSlot0(
+            poolManager,
+            poolId
+        );
+        uint24 fee = getFee(poolKey, currentSqrtPriceX96);
         poolManager.updateDynamicLPFee(poolKey, fee);
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
         return (
@@ -132,7 +137,12 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         IPoolManager.SwapParams calldata,
         BalanceDelta,
         bytes calldata
-    ) external pure override returns (bytes4, int128) {
+    ) external override returns (bytes4, int128) {
+        //TODO Check events/parameters and if it should be here.
+        //Get last tick
+        //Emit tick event
+        //Get Shield
+        //Emit Register Shield event  (FeeMax, TokenHold, TokenId)
         return (this.afterSwap.selector, 0);
     }
 
@@ -195,6 +205,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
             shieldInfos[poolId].tickSpacing
         );
 
+        //TODO: Evaluate how to calculate tickLower
         // Calculate tickLower and tickUpper
         int24 tickLower = tickSpacing * (currentTick / tickSpacing);
         int24 tickUpper = tickLower + tickSpacing; // Next tick boundary
