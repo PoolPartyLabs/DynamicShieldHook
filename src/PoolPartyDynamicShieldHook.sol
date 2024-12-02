@@ -16,6 +16,7 @@ import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-core/src/libraries/SqrtPriceMath.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 
 /** Uniswap v4 Periphery */
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -30,13 +31,15 @@ import {console} from "forge-std/Test.sol";
 
 contract PoolPartyDynamicShieldHook is BaseHook {
     using CurrencyLibrary for Currency;
+    using StateLibrary for IPoolManager;
+    using PoolIdLibrary for PoolKey;
 
     IPositionManager s_positionManager;
     PoolVaultManager s_vaultManager;
     IAllowanceTransfer s_permit2;
-    mapping(bytes32 => ShieldInfo) public shieldInfos;
-    mapping(bytes32 => int24) public lastTicks;
-    mapping(bytes32 => uint24) public lastFees;
+    mapping(PoolId => ShieldInfo) public shieldInfos;
+    mapping(PoolId => int24) public lastTicks;
+    mapping(PoolId => uint24) public lastFees;
 
     struct CallData {
         PoolKey key;
@@ -63,6 +66,17 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     // Errors
     error InvalidPositionManager();
     error InvalidSelf();
+
+    //Events
+    event TickEvent(PoolId poolId, int24 currentTick);
+
+    // Event to register Shield information
+    event RegisterShieldEvent(
+        PoolId poolId,
+        uint24 feeMax,
+        uint256 tokenId,
+        address holder
+    );
 
     // Initialize BaseHook parent contract in the constructor
     constructor(
@@ -106,13 +120,6 @@ contract PoolPartyDynamicShieldHook is BaseHook {
             });
     }
 
-    // Function to generate a hash for a PoolKey
-    function getPoolKeyHash(
-        PoolKey memory poolKey
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encode(poolKey.currency0, poolKey.currency1));
-    }
-
     function initializeShieldTokenHolder(
         PoolKey calldata _poolKey,
         Currency _safeToken,
@@ -148,22 +155,44 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         onlyPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        console.log("Before Swap");
-        //TODO: Check if params.sqrtPriceLimitX96 represent current sqrtPrice
-        // uint24 fee = getFee(poolKey, params.sqrtPriceLimitX96);
-        // poolManager.updateDynamicLPFee(poolKey, fee);
-        // uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
-        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        PoolId poolId = poolKey.toId();
+        (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
+        uint24 fee = getFee(poolKey, currentSqrtPriceX96);
+        poolManager.updateDynamicLPFee(poolKey, fee);
+        uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
+        return (
+            this.beforeSwap.selector,
+            BeforeSwapDeltaLibrary.ZERO_DELTA,
+            feeWithFlag
+        );
     }
 
     function afterSwap(
         address,
-        PoolKey calldata,
+        PoolKey calldata _poolKey,
         IPoolManager.SwapParams calldata,
         BalanceDelta,
         bytes calldata
-    ) external pure override returns (bytes4, int128) {
-        console.log("After Swap");
+    ) external override returns (bytes4, int128) {
+        //TODO Check events/parameters and if it should be here.
+        // Get last tick
+        PoolId poolId = _poolKey.toId();
+        int24 lastTick = lastTicks[poolId];
+
+        // Emit tick event
+        emit TickEvent(poolId, lastTick);
+
+        // Get ShieldInfo for the current pool
+        ShieldInfo memory shieldInfo = shieldInfos[poolId];
+
+        // Emit Register Shield event (FeeMax, TokenHold, TokenId)
+        emit RegisterShieldEvent(
+            poolId,
+            shieldInfo.feeMax,
+            shieldInfo.tokenId,
+            msg.sender // The operator who initiated the swap
+        );
+
         return (this.afterSwap.selector, 0);
     }
 
@@ -184,8 +213,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         //     _tokenId
         // );
 
-        bytes32 keyHash = getPoolKeyHash(data.key);
-        shieldInfos[keyHash] = ShieldInfo({
+        shieldInfos[data.key.toId()] = ShieldInfo({
             tickSpacing: data.tickSpacing,
             feeInit: data.feeInit,
             feeMax: data.feeMax,
@@ -286,17 +314,15 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     }
 
     function getFee(
-        PoolKey calldata poolKey,
-        uint160 sqrtPriceX96
+        PoolKey calldata _poolKey,
+        uint160 _sqrtPriceX96
     ) internal returns (uint24) {
-        bytes32 keyHash = getPoolKeyHash(poolKey);
-        // Get the current sqrtPrice
-        uint160 currentSqrtPriceX96 = sqrtPriceX96;
+        PoolId poolId = _poolKey.toId();
         // Get the current tick value from sqrtPriceX96
-        int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
+        int24 currentTick = getTickFromSqrtPrice(_sqrtPriceX96);
 
         // Ensure `lastTicks` is initialized
-        int24 lastTick = lastTicks[keyHash];
+        int24 lastTick = lastTicks[poolId];
 
         // Calculate diffTicks (absolute difference between currentTick and lastTick)
         int24 diffTicks = currentTick > lastTick
@@ -307,11 +333,12 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         require(diffTicks >= 0, "diffTicks cannot be negative");
 
         int24 tickSpacing = getTickSpacingValue(
-            shieldInfos[keyHash].tickSpacing
+            shieldInfos[poolId].tickSpacing
         );
 
+        //TODO: Evaluate how to calculate tickLower
         // Calculate tickLower and tickUpper
-        int24 tickLower = (currentTick / tickSpacing) * tickSpacing; // Round down to nearest tick spacing
+        int24 tickLower = tickSpacing * (currentTick / tickSpacing);
         int24 tickUpper = tickLower + tickSpacing; // Next tick boundary
 
         // Calculate totalTicks (absolute difference between tickUpper and tickLower)
@@ -323,8 +350,8 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         totalTicks = totalTicks < 2 ? int24(2) : totalTicks;
 
         // Get fee
-        uint24 feeInit = shieldInfos[keyHash].feeInit;
-        uint24 feeMax = shieldInfos[keyHash].feeMax;
+        uint24 feeInit = shieldInfos[poolId].feeInit;
+        uint24 feeMax = shieldInfos[poolId].feeMax;
 
         // Ensure FeeInit is less than or equal to feeMax
         require(
@@ -337,34 +364,34 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
         //TODO: Check if set last fee and tick here
         // Store last fee and tick
-        lastFees[keyHash] = newFee;
-        lastTicks[keyHash] = currentTick;
+        lastFees[poolId] = newFee;
+        lastTicks[poolId] = currentTick;
 
         return newFee;
     }
 
     function getTickFromSqrtPrice(
-        uint160 sqrtPriceX96
-    ) public pure returns (int24 tickValue) {
+        uint160 _sqrtPriceX96
+    ) internal pure returns (int24 tickValue) {
         // Ensure the sqrtPriceX96 value is within the valid range
         require(
-            sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE &&
-                sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE,
+            _sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE &&
+                _sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE,
             "sqrtPriceX96 out of range"
         );
 
         // Calculate the tick value using TickMath
-        tickValue = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+        tickValue = TickMath.getTickAtSqrtPrice(_sqrtPriceX96);
     }
 
     function getTickSpacingValue(
-        TickSpacing tickSpacing
-    ) public pure returns (int24) {
-        if (tickSpacing == TickSpacing.Low) {
+        TickSpacing _tickSpacing
+    ) internal pure returns (int24) {
+        if (_tickSpacing == TickSpacing.Low) {
             return 10;
-        } else if (tickSpacing == TickSpacing.Medium) {
+        } else if (_tickSpacing == TickSpacing.Medium) {
             return 50;
-        } else if (tickSpacing == TickSpacing.High) {
+        } else if (_tickSpacing == TickSpacing.High) {
             return 200;
         }
         revert("Invalid TickSpacing");

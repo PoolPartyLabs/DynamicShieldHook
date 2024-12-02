@@ -7,6 +7,8 @@ contract PoolPartyDynamicShieldHookTest is TestHelper {
     // Use the libraries
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using Planner for Plan;
+    using BipsLibrary for uint256;
 
     function test_initializeShieldTokenHolder() public {
         _initShield();
