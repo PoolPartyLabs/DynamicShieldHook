@@ -19,6 +19,7 @@ import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
 
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
@@ -183,7 +184,7 @@ abstract contract TestHelper is PosmTestSetup {
             token0,
             token1,
             _hooks,
-            3000,
+            LPFeeLibrary.DYNAMIC_FEE_FLAG,
             SQRT_PRICE_1_1
         );
 

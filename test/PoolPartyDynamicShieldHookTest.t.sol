@@ -95,7 +95,7 @@ contract PoolPartyDynamicShieldHookTest is TestHelper {
 
         assertEq(1663396223366406680748, lpm.getPositionLiquidity(tokenId));
         assertEq(
-            120147396899220786,
+            0,
             IERC20(Currency.unwrap(token0)).balanceOf(
                 s_shieldHook.getVaulManagerAddress()
             )

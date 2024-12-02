@@ -148,7 +148,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     function beforeSwap(
         address,
         PoolKey calldata _poolKey,
-        IPoolManager.SwapParams calldata _params,
+        IPoolManager.SwapParams calldata,
         bytes calldata
     )
         external
@@ -160,9 +160,9 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
         uint24 fee = getFee(_poolKey, currentSqrtPriceX96);
         // console.log("beforeSwap.fee", fee);
-        // poolManager.updateDynamicLPFee(_poolKey, fee);
+        poolManager.updateDynamicLPFee(_poolKey, fee);
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
-        int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
+        // int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
         // console.log("beforeSwap.currentTick", currentTick);
         // if (currentTick == -5) {
         //     uint256[] memory _tokenIds = tokenIds[poolId];
@@ -172,7 +172,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         //         block.timestamp + 3000
         //     );
         // }
-        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, feeWithFlag);
     }
 
     function afterSwap(
