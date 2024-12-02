@@ -40,6 +40,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     mapping(PoolId => ShieldInfo) public shieldInfos;
     mapping(PoolId => int24) public lastTicks;
     mapping(PoolId => uint24) public lastFees;
+    mapping(PoolId => uint256[]) public tokenIds;
 
     struct CallData {
         PoolKey key;
@@ -146,8 +147,8 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
     function beforeSwap(
         address,
-        PoolKey calldata poolKey,
-        IPoolManager.SwapParams calldata params,
+        PoolKey calldata _poolKey,
+        IPoolManager.SwapParams calldata _params,
         bytes calldata
     )
         external
@@ -155,16 +156,23 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         onlyPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        PoolId poolId = poolKey.toId();
+        PoolId poolId = _poolKey.toId();
         (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
-        uint24 fee = getFee(poolKey, currentSqrtPriceX96);
-        poolManager.updateDynamicLPFee(poolKey, fee);
+        uint24 fee = getFee(_poolKey, currentSqrtPriceX96);
+        // console.log("beforeSwap.fee", fee);
+        // poolManager.updateDynamicLPFee(_poolKey, fee);
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
-        return (
-            this.beforeSwap.selector,
-            BeforeSwapDeltaLibrary.ZERO_DELTA,
-            feeWithFlag
-        );
+        int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
+        // console.log("beforeSwap.currentTick", currentTick);
+        // if (currentTick == -5) {
+        //     uint256[] memory _tokenIds = tokenIds[poolId];
+        //     s_vaultManager.removeLiquidityInBatch(
+        //         _poolKey,
+        //         _tokenIds,
+        //         block.timestamp + 3000
+        //     );
+        // }
+        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
     function afterSwap(
@@ -177,7 +185,10 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         //TODO Check events/parameters and if it should be here.
         // Get last tick
         PoolId poolId = _poolKey.toId();
+        (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
         int24 lastTick = lastTicks[poolId];
+
+        // console.log("afterSwap.lastTick", lastTick);
 
         // Emit tick event
         emit TickEvent(poolId, lastTick);
@@ -192,6 +203,13 @@ contract PoolPartyDynamicShieldHook is BaseHook {
             shieldInfo.tokenId,
             msg.sender // The operator who initiated the swap
         );
+
+        int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
+        // console.log("afterSwap.currentTick", currentTick);
+        if (currentTick == -5) {
+            uint256[] memory _tokenIds = tokenIds[poolId];
+            s_vaultManager.removeLiquidityInBatch(_poolKey, _tokenIds);
+        }
 
         return (this.afterSwap.selector, 0);
     }
@@ -231,6 +249,8 @@ contract PoolPartyDynamicShieldHook is BaseHook {
             _tokenId,
             _from
         );
+
+        tokenIds[data.key.toId()].push(_tokenId);
 
         return this.onERC721Received.selector;
     }
@@ -284,29 +304,6 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         uint256 _deadline
     ) external {
         s_vaultManager.collectFees(_key, _tokenId, _deadline);
-    }
-
-    function swapTest(
-        Currency _currencyIn,
-        uint256 _tokenId,
-        uint256 _amountIn,
-        address _recipient
-    ) public {
-        IERC20(Currency.unwrap(_currencyIn)).transferFrom(
-            msg.sender,
-            address(this),
-            _amountIn
-        );
-        IERC20(Currency.unwrap(_currencyIn)).approve(
-            address(s_vaultManager),
-            _amountIn
-        );
-        s_vaultManager._swapExactInputSingle(
-            _currencyIn,
-            _tokenId,
-            _amountIn,
-            _recipient
-        );
     }
 
     function getVaulManagerAddress() public view returns (address) {

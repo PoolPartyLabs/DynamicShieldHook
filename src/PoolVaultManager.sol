@@ -23,11 +23,13 @@ import {PositionInfo, PositionInfoLibrary} from "v4-periphery/src/libraries/Posi
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
-import {V4Router, IV4Router} from "v4-periphery/src/V4Router.sol";
+import {CalldataDecoder} from "v4-periphery/src/libraries/CalldataDecoder.sol";
 
-/** Intenral */
+/** Internal */
 import {Planner, Plan} from "./library/external/Planner.sol";
 import {LiquidityAmounts} from "./library/external/LiquidityAmounts.sol";
+
+import {V4Router, IV4Router} from "./external/V4Router.sol";
 
 import {console} from "forge-std/Test.sol";
 
@@ -40,6 +42,7 @@ contract PoolVaultManager is V4Router {
     using PositionInfoLibrary for PositionInfo;
     using CurrencyLibrary for Currency;
     using SafeTransferLib for *;
+    using CalldataDecoder for bytes;
 
     struct Position {
         PoolKey key;
@@ -178,30 +181,13 @@ contract PoolVaultManager is V4Router {
     ) external onlyHook {
         require(_percentage > 0 && _percentage <= 100e4, "Invalid percentage");
 
-        uint128 liquidity = s_lpm.getPositionLiquidity(_tokenId);
-        (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(_key.toId());
-        uint128 liquidityToRemove = uint128((liquidity * _percentage) / 100e4);
-        (, PositionInfo info) = s_lpm.getPoolAndPositionInfo(_tokenId);
-
-        (uint256 amount0, uint256 amount1) = LiquidityAmounts
-            .getAmountsForLiquidity(
-                sqrtPriceX96,
-                TickMath.getSqrtPriceAtTick(info.tickLower()),
-                TickMath.getSqrtPriceAtTick(info.tickUpper()),
-                liquidityToRemove
-            );
-
-        Plan memory planner = Planner.init();
-        planner.add(
-            Actions.DECREASE_LIQUIDITY,
-            // @todo should inform minAmount0 and minAmount1 to prevent slippage
-            abi.encode(_tokenId, liquidityToRemove, 0, 0, ZERO_BYTES)
+        (uint256 amount0, uint256 amount1) = _removeLiquidity(
+            _key,
+            _tokenId,
+            _percentage,
+            _deadline,
+            false
         );
-        planner.finalizeModifyLiquidityWithClose(_key);
-
-        bytes memory actions = planner.encode();
-
-        s_lpm.modifyLiquidities(actions, _deadline);
 
         Position memory position = s_postions[_tokenId];
 
@@ -240,23 +226,33 @@ contract PoolVaultManager is V4Router {
 
     function removeLiquidityInBatch(
         PoolKey calldata _key,
-        uint256[] calldata _tokenIds,
-        uint256 _deadline
+        uint256[] calldata _tokenIds
     ) external {
         uint256 tokenIdsLength = _tokenIds.length;
         require(tokenIdsLength <= 500, "Too many tokenIds");
 
         for (uint256 i = 0; i < tokenIdsLength; i++) {
+            uint256 tonekId = _tokenIds[i];
             (uint256 amount0, uint256 amount1) = _removeLiquidity(
                 _key,
-                _tokenIds[i],
-                100e4,
-                _deadline
+                tonekId,
+                99e4,
+                0,
+                true
+            );
+            _swapExactInputSingle(
+                _key.currency0,
+                tonekId,
+                amount0,
+                address(this)
             );
 
-            // Position memory position = s_postions[_tokenIds[i]];
-            // _key.currency0.transfer(position.owner, amount0);
-            // _key.currency1.transfer(position.owner, amount1);
+            _swapExactInputSingle(
+                _key.currency1,
+                tonekId,
+                amount1,
+                address(this)
+            );
         }
     }
 
@@ -330,7 +326,8 @@ contract PoolVaultManager is V4Router {
         PoolKey memory _key,
         uint256 _tokenId,
         uint128 _percentage,
-        uint256 _deadline
+        uint256 _deadline,
+        bool _withoutUnlock
     ) private returns (uint256 amount0, uint256 amount1) {
         uint128 liquidity = s_lpm.getPositionLiquidity(_tokenId);
         (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(_key.toId());
@@ -343,7 +340,6 @@ contract PoolVaultManager is V4Router {
             TickMath.getSqrtPriceAtTick(info.tickUpper()),
             liquidityToRemove
         );
-
         Plan memory planner = Planner.init();
         planner.add(
             Actions.DECREASE_LIQUIDITY,
@@ -352,9 +348,17 @@ contract PoolVaultManager is V4Router {
         );
         planner.finalizeModifyLiquidityWithClose(_key);
 
-        bytes memory actions = planner.encode();
+        bytes memory plan = planner.encode();
+        if (_withoutUnlock) {
+            (bytes memory actions, bytes[] memory params) = abi.decode(
+                plan,
+                (bytes, bytes[])
+            );
 
-        s_lpm.modifyLiquidities(actions, _deadline);
+            s_lpm.modifyLiquiditiesWithoutUnlock(actions, params);
+        } else {
+            s_lpm.modifyLiquidities(plan, _deadline);
+        }
     }
 
     function _swapExactInputSingle(
@@ -362,7 +366,7 @@ contract PoolVaultManager is V4Router {
         uint256 _tokenId,
         uint256 _amountIn,
         address _recipient
-    ) public {
+    ) private {
         Currency safeToken = s_postions[_tokenId].safeToken;
         // @todo should be removed in production and use multiple pathkeys
         PoolKey memory poolKeyCurrencyToUSDC = _poolKeyUnsorted(
@@ -375,11 +379,6 @@ contract PoolVaultManager is V4Router {
 
         bool zeroForOne = true;
 
-        IERC20(Currency.unwrap(_currencyIn)).transferFrom(
-            msg.sender,
-            address(this),
-            _amountIn
-        );
         IERC20(Currency.unwrap(_currencyIn)).approve(
             address(poolManager),
             _amountIn
@@ -403,7 +402,11 @@ contract PoolVaultManager is V4Router {
             _recipient
         );
 
-        _executeActions(data);
+        (bytes memory actions, bytes[] memory _params) = abi.decode(
+            data,
+            (bytes, bytes[])
+        );
+        _executeActionsWithoutUnlock(actions, _params);
     }
 
     function _poolKeyUnsorted(

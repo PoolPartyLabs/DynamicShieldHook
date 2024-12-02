@@ -59,26 +59,59 @@ contract PoolPartyDynamicShieldHookTest is TestHelper {
         vm.stopPrank();
     }
 
-    function test_swapLiquidty() public {
+    function test_swapMulti() public {
         _initShield();
+        PoolKey[] memory pools = new PoolKey[](10);
+        int256[] memory amounts = new int256[](10);
 
-        vm.startPrank(alice);
-        console.log("===========");
-        console.log("SWAPPPPP");
-        console.log("balanceBefore.token0", token0.balanceOf(address(alice)));
-        console.log("balanceBefore.token1", token1.balanceOf(address(alice)));
-        console.log("balanceBefore.USDC", USDC.balanceOf(address(alice)));
-        IERC20(Currency.unwrap(token0)).approve(address(s_shieldHook), 100e18);
-        IERC20(Currency.unwrap(token1)).approve(address(s_shieldHook), 100e18);
+        assertEq(166339622336640668074730, lpm.getPositionLiquidity(tokenId));
+        assertEq(
+            0,
+            IERC20(Currency.unwrap(token0)).balanceOf(
+                s_shieldHook.getVaulManagerAddress()
+            )
+        );
+        assertEq(
+            0,
+            IERC20(Currency.unwrap(token1)).balanceOf(
+                s_shieldHook.getVaulManagerAddress()
+            )
+        );
+        assertEq(
+            0,
+            IERC20(Currency.unwrap(stableCoin)).balanceOf(
+                s_shieldHook.getVaulManagerAddress()
+            )
+        );
+        for (uint256 i = 0; i < 10; i++) {
+            pools[i] = key;
+            if (i % 2 == 0) {
+                amounts[i] = 1e18 * int256(i + 1);
+            } else {
+                amounts[i] = -1e18 * int256(i + 2);
+            }
+        }
+        _swapMulti(pools, amounts);
 
-        s_shieldHook.swapTest(token0, tokenId, 1e18, alice);
-        s_shieldHook.swapTest(token1, tokenId, 1e18, alice);
-
-        console.log("balanceAFTER.token0", token0.balanceOf(address(alice)));
-        console.log("balanceAFTER.token1", token1.balanceOf(address(alice)));
-        console.log("balanceAFTER.USDC", USDC.balanceOf(address(alice)));
-        console.log("=========");
-        vm.stopPrank();
+        assertEq(1663396223366406680748, lpm.getPositionLiquidity(tokenId));
+        assertEq(
+            120147396899220786,
+            IERC20(Currency.unwrap(token0)).balanceOf(
+                s_shieldHook.getVaulManagerAddress()
+            )
+        );
+        assertEq(
+            0,
+            IERC20(Currency.unwrap(token1)).balanceOf(
+                s_shieldHook.getVaulManagerAddress()
+            )
+        );
+        assertEq(
+            2999999972,
+            IERC20(Currency.unwrap(stableCoin)).balanceOf(
+                s_shieldHook.getVaulManagerAddress()
+            )
+        );
     }
 
     function _initShield() internal {
