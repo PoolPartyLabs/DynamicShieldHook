@@ -33,6 +33,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
+    using SqrtPriceMath for uint160;
 
     IPositionManager s_positionManager;
     PoolVaultManager s_vaultManager;
@@ -148,7 +149,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     function beforeSwap(
         address,
         PoolKey calldata _poolKey,
-        IPoolManager.SwapParams calldata,
+        IPoolManager.SwapParams calldata _params,
         bytes calldata
     )
         external
@@ -159,20 +160,34 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         PoolId poolId = _poolKey.toId();
         (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
         uint24 fee = getFee(_poolKey, currentSqrtPriceX96);
-        // console.log("beforeSwap.fee", fee);
+
         poolManager.updateDynamicLPFee(_poolKey, fee);
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
-        // int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
-        // console.log("beforeSwap.currentTick", currentTick);
-        // if (currentTick == -5) {
-        //     uint256[] memory _tokenIds = tokenIds[poolId];
-        //     s_vaultManager.removeLiquidityInBatch(
-        //         _poolKey,
-        //         _tokenIds,
-        //         block.timestamp + 3000
-        //     );
-        // }
-        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, feeWithFlag);
+
+        uint128 liquidity = poolManager.getLiquidity(poolId);
+        console.log("beforeSwap.liquidity", liquidity);
+        console.log("beforeSwap._params.zeroForOne", _params.zeroForOne);
+
+        uint160 nextSqrtPriceX96 = currentSqrtPriceX96
+            .getNextSqrtPriceFromAmount0RoundingUp(
+                liquidity,
+                uint256(_params.amountSpecified),
+                !_params.zeroForOne
+            );
+
+        int24 nextTick = getTickFromSqrtPrice(nextSqrtPriceX96);
+
+
+        console.log("beforeSwap.nextTick", nextTick);
+
+        // Emit tick event
+        emit TickEvent(poolId, nextTick);
+
+        return (
+            this.beforeSwap.selector,
+            BeforeSwapDeltaLibrary.ZERO_DELTA,
+            feeWithFlag
+        );
     }
 
     function afterSwap(
@@ -189,20 +204,6 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         int24 lastTick = lastTicks[poolId];
 
         // console.log("afterSwap.lastTick", lastTick);
-
-        // Emit tick event
-        emit TickEvent(poolId, lastTick);
-
-        // Get ShieldInfo for the current pool
-        ShieldInfo memory shieldInfo = shieldInfos[poolId];
-
-        // Emit Register Shield event (FeeMax, TokenHold, TokenId)
-        emit RegisterShieldEvent(
-            poolId,
-            shieldInfo.feeMax,
-            shieldInfo.tokenId,
-            msg.sender // The operator who initiated the swap
-        );
 
         int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
         // console.log("afterSwap.currentTick", currentTick);
@@ -226,12 +227,13 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         if (_operator != address(this)) revert InvalidSelf();
 
         CallData memory data = abi.decode(_data, (CallData));
+        PoolId poolId = data.key.toId();
 
         // (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
         //     _tokenId
         // );
 
-        shieldInfos[data.key.toId()] = ShieldInfo({
+        shieldInfos[poolId] = ShieldInfo({
             tickSpacing: data.tickSpacing,
             feeInit: data.feeInit,
             feeMax: data.feeMax,
@@ -251,6 +253,14 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         );
 
         tokenIds[data.key.toId()].push(_tokenId);
+
+        // Emit Register Shield event (FeeMax, TokenHold, TokenId)
+        emit RegisterShieldEvent(
+            poolId,
+            data.feeMax,
+            _tokenId,
+            _from // The operator who initiated the swap
+        );
 
         return this.onERC721Received.selector;
     }

@@ -31,7 +31,6 @@ import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 
 // Our contracts
 import {Planner, Plan} from "../src/library/external/Planner.sol";
-import {PositionValue} from "../src/library/external/PositionValue.sol";
 import {PoolPartyDynamicShieldHook} from "../src/PoolPartyDynamicShieldHook.sol";
 
 abstract contract TestHelper is PosmTestSetup {
@@ -41,7 +40,6 @@ abstract contract TestHelper is PosmTestSetup {
     using CurrencyLibrary for Currency;
     using Planner for Plan;
     using BipsLibrary for uint256;
-    using PositionValue for IPoolManager;
 
     // The two currencies (tokens) from the pool
     Currency token0;
@@ -67,8 +65,6 @@ abstract contract TestHelper is PosmTestSetup {
         USDC = new MockERC20("USDC", "USDC", 6);
         stableCoin = Currency.wrap(address(USDC));
         console.log("============>>>> USDC", address(USDC));
-
-        // USDC.mint(alice, 1000000e6);
 
         // Requires currency0 and currency1 to be set in base Deployers contract.
         deployAndApprovePosm(manager);

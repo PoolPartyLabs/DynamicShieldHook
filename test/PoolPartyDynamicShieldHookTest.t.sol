@@ -51,7 +51,7 @@ contract PoolPartyDynamicShieldHookTest is TestHelper {
         s_shieldHook.removeLiquidity(
             key,
             tokenId,
-            50e4,
+            50e4, // 50%
             block.timestamp + 1000
         );
         uint128 newLiquidity = lpm.getPositionLiquidity(tokenId);

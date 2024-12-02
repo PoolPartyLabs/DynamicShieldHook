@@ -236,7 +236,7 @@ contract PoolVaultManager is V4Router {
             (uint256 amount0, uint256 amount1) = _removeLiquidity(
                 _key,
                 tonekId,
-                99e4,
+                99e4, // 99%
                 0,
                 true
             );
