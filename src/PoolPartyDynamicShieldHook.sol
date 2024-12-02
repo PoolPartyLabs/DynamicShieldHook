@@ -7,7 +7,7 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {PositionInfo, PositionInfoLibrary} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
+import {PositionInfo} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
@@ -15,25 +15,20 @@ import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-core/libraries/SqrtPriceMath.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {PoolVaultManager} from "./PoolVaultManager.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 
 contract PoolPartyDynamicShieldHook is BaseHook {
     IPositionManager s_positionManager;
     PoolVaultManager s_vaultManager;
-    mapping(bytes32 => ShieldInfo) public shieldInfos;
-    mapping(bytes32 => int24) public lastTicks;
-    mapping(bytes32 => uint24) public lastFees;
+    mapping(PoolId => ShieldInfo) public shieldInfos;
+    mapping(PoolId => int24) public lastTicks;
+    mapping(PoolId => uint24) public lastFees;
 
     struct CallData {
         PoolKey key;
         uint24 feeInit;
         uint24 feeMax;
         TickSpacing tickSpacing;
-    }
-
-    enum TickSpacing {
-        Low, // 10
-        Medium, // 50
-        High // 200
     }
 
     struct ShieldInfo {
@@ -43,9 +38,26 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         uint256 tokenId; // Associated token ID
     }
 
+    enum TickSpacing {
+        Low, // 10
+        Medium, // 50
+        High // 200
+    }
+
     // Errors
     error InvalidPositionManager();
     error InvalidSelf();
+
+    //Events
+    event TickEvent(PoolId poolId, int24 currentTick);
+
+    // Event to register Shield information
+    event RegisterShieldEvent(
+        PoolId poolId,
+        uint24 feeMax,
+        uint256 tokenId,
+        address holder
+    );
 
     // Initialize BaseHook parent contract in the constructor
     constructor(
@@ -82,13 +94,6 @@ contract PoolPartyDynamicShieldHook is BaseHook {
             });
     }
 
-    // Function to generate a hash for a PoolKey
-    function getPoolKeyHash(
-        PoolKey memory poolKey
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encode(poolKey.currency0, poolKey.currency1));
-    }
-
     function initializeShieldTokenHolder(
         PoolKey calldata _poolKey,
         TickSpacing _tickSpacing,
@@ -122,8 +127,12 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         onlyPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        //TODO: Check if params.sqrtPriceLimitX96 represent current sqrtPrice
-        uint24 fee = getFee(poolKey, params.sqrtPriceLimitX96);
+        PoolId poolId = PoolIdLibrary.toId(poolKey);
+        (uint160 currentSqrtPriceX96, , , ) = StateLibrary.getSlot0(
+            poolManager,
+            poolId
+        );
+        uint24 fee = getFee(poolKey, currentSqrtPriceX96);
         poolManager.updateDynamicLPFee(poolKey, fee);
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
         return (
@@ -135,14 +144,32 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
     function afterSwap(
         address,
-        PoolKey calldata,
+        PoolKey calldata _poolKey,
         IPoolManager.SwapParams calldata,
         BalanceDelta,
         bytes calldata
-    ) external pure override returns (bytes4, int128) {
+    ) external override returns (bytes4, int128) {
+        //TODO Check events/parameters and if it should be here.
+        // Get last tick
+        PoolId poolId = PoolIdLibrary.toId(_poolKey);
+        int24 lastTick = lastTicks[poolId];
+
+        // Emit tick event
+        emit TickEvent(poolId, lastTick);
+
+        // Get ShieldInfo for the current pool
+        ShieldInfo memory shieldInfo = shieldInfos[poolId];
+
+        // Emit Register Shield event (FeeMax, TokenHold, TokenId)
+        emit RegisterShieldEvent(
+            poolId,
+            shieldInfo.feeMax,
+            shieldInfo.tokenId,
+            msg.sender // The operator who initiated the swap
+        );
+
         return (this.afterSwap.selector, 0);
     }
-
 
     function onERC721Received(
         address _operator,
@@ -151,22 +178,28 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         bytes calldata _data
     ) external returns (bytes4) {
         // Check if the sender is the position manager
-        if (msg.sender != address(s_positionManager)) revert InvalidPositionManager();
+        if (msg.sender != address(s_positionManager))
+            revert InvalidPositionManager();
         if (_operator != address(this)) revert InvalidSelf();
 
         CallData memory data = abi.decode(_data, (CallData));
-        
-        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(_tokenId); 
- 
-        bytes32 keyHash = getPoolKeyHash(data.key);
-        shieldInfos[keyHash] = ShieldInfo({
+
+        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
+            _tokenId
+        );
+
+        PoolId poolId = PoolIdLibrary.toId(data.key);
+        shieldInfos[poolId] = ShieldInfo({
             tickSpacing: data.tickSpacing,
             feeInit: data.feeInit,
             feeMax: data.feeMax,
             tokenId: _tokenId
         });
 
-        IERC721(address(s_positionManager)).approve(address(s_vaultManager), _tokenId);
+        IERC721(address(s_positionManager)).approve(
+            address(s_vaultManager),
+            _tokenId
+        );
         s_vaultManager.depositPosition(data.key, _tokenId, _from);
 
         return this.onERC721Received.selector;
@@ -176,14 +209,14 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         PoolKey calldata poolKey,
         uint160 sqrtPriceX96
     ) internal returns (uint24) {
-        bytes32 keyHash = getPoolKeyHash(poolKey);
+        PoolId poolId = PoolIdLibrary.toId(poolKey);
         // Get the current sqrtPrice
         uint160 currentSqrtPriceX96 = sqrtPriceX96;
         // Get the current tick value from sqrtPriceX96
         int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
 
         // Ensure `lastTicks` is initialized
-        int24 lastTick = lastTicks[keyHash];
+        int24 lastTick = lastTicks[poolId];
 
         // Calculate diffTicks (absolute difference between currentTick and lastTick)
         int24 diffTicks = currentTick > lastTick
@@ -194,11 +227,12 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         require(diffTicks >= 0, "diffTicks cannot be negative");
 
         int24 tickSpacing = getTickSpacingValue(
-            shieldInfos[keyHash].tickSpacing
+            shieldInfos[poolId].tickSpacing
         );
 
+        //TODO: Evaluate how to calculate tickLower
         // Calculate tickLower and tickUpper
-        int24 tickLower = (currentTick / tickSpacing) * tickSpacing; // Round down to nearest tick spacing
+        int24 tickLower = tickSpacing * (currentTick / tickSpacing);
         int24 tickUpper = tickLower + tickSpacing; // Next tick boundary
 
         // Calculate totalTicks (absolute difference between tickUpper and tickLower)
@@ -210,8 +244,8 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         totalTicks = totalTicks < 2 ? int24(2) : totalTicks;
 
         // Get fee
-        uint24 feeInit = shieldInfos[keyHash].feeInit;
-        uint24 feeMax = shieldInfos[keyHash].feeMax;
+        uint24 feeInit = shieldInfos[poolId].feeInit;
+        uint24 feeMax = shieldInfos[poolId].feeMax;
 
         // Ensure FeeInit is less than or equal to feeMax
         require(
@@ -224,8 +258,8 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
         //TODO: Check if set last fee and tick here
         // Store last fee and tick
-        lastFees[keyHash] = newFee;
-        lastTicks[keyHash] = currentTick;
+        lastFees[poolId] = newFee;
+        lastTicks[poolId] = currentTick;
 
         return newFee;
     }
