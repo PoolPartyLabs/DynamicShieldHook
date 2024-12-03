@@ -58,7 +58,7 @@ $ anvil
 V4 Uniswap Core
 
 ```shell
-$ forge script script/V4Deployer.sol --fork-url http://127.0.0.1:8545 --broadcast --private-key <PRIVATE_KEY>
+$ forge script script/DeployV4Core.sol --fork-url http://127.0.0.1:8545 --broadcast --private-key <PRIVATE_KEY>
 ```
 
 Deployed PoolManager at 0x5FbDB2315678afecb367f032d93F642f64180aa3

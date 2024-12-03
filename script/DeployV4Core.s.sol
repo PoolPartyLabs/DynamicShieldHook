@@ -11,7 +11,7 @@ import {PoolClaimsTest} from "v4-core/src/test/PoolClaimsTest.sol";
 
 import "forge-std/console.sol";
 
-contract V4Deployer is Script {
+contract DeployV4Core is Script {
     function run() public {
         vm.startBroadcast();
 
