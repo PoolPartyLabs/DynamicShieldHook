@@ -12,10 +12,15 @@ import {PoolClaimsTest} from "v4-core/src/test/PoolClaimsTest.sol";
 import "forge-std/console.sol";
 
 contract DeployV4Core is Script {
-    function run() public {
-        vm.startBroadcast();
+    uint256 privateKey;
+    address signerAddr;
 
-        PoolManager manager = new PoolManager(msg.sender);
+    function run() public {
+        privateKey = vm.envUint("PRIVATE_KEY");
+        signerAddr = vm.addr(privateKey);
+        vm.startBroadcast(privateKey);
+
+        PoolManager manager = new PoolManager(signerAddr);
         console.log("Deployed PoolManager at", address(manager));
         PoolSwapTest swapRouter = new PoolSwapTest(manager);
         console.log("Deployed PoolSwapTest at", address(swapRouter));
@@ -33,8 +38,8 @@ contract DeployV4Core is Script {
         PoolClaimsTest claimsRouter = new PoolClaimsTest(manager);
         console.log("Deployed PoolClaimsTest at", address(claimsRouter));
 
-        // Anything else you need to do like minting mock ERC20s or initializing a pool
-        // you need to do directly here as well without using Deployers
+        //TODO: Deploy Position Manager
+        //v4-periphery/src/libraries/PositionManager.sol
 
         vm.stopBroadcast();
     }

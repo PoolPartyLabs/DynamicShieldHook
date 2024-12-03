@@ -5,6 +5,7 @@
 pragma solidity ^0.8.26;
 
 import {Script} from "forge-std/Script.sol";
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {PoolManager} from "v4-core/src/PoolManager.sol";
 import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
 import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.sol";
@@ -20,9 +21,10 @@ import {Currency} from "v4-core/src/types/Currency.sol";
 import {PoolPartyDynamicShieldHook} from "../src/PoolPartyDynamicShieldHook.sol";
 import {PosmTestSetup} from "v4-periphery/test/shared/PosmTestSetup.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+import {Constants} from "v4-core/test/utils/Constants.sol";
 import "forge-std/console.sol";
 
-contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
+contract DeployPoolPartyDynamicShieldHook is Script {
     PoolManager manager =
         PoolManager(0x5FbDB2315678afecb367f032d93F642f64180aa3);
     PoolSwapTest swapRouter =
@@ -37,11 +39,18 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
 
     PoolKey key;
 
+    uint256 privateKey;
+    address signerAddr;
+
     function setUp() public {
-        vm.startBroadcast();
+        privateKey = vm.envUint("PRIVATE_KEY");
+        signerAddr = vm.addr(privateKey);
+        vm.startBroadcast(privateKey);
 
         MockERC20 tokenA = new MockERC20("Token0", "TK0", 18);
+        tokenA.mint(signerAddr, 100000e18);
         MockERC20 tokenB = new MockERC20("Token1", "TK1", 18);
+        tokenB.mint(signerAddr, 100000e18);
 
         (token0, token1) = (
             Currency.wrap(address(tokenA)),
@@ -53,15 +62,12 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
 
         tokenA.approve(address(modifyLiquidityRouter), type(uint256).max);
         tokenB.approve(address(modifyLiquidityRouter), type(uint256).max);
-        stableCoin.approve(address(modifyLiquidityRouter), type(uint256).max)
+        stableCoin.approve(address(modifyLiquidityRouter), type(uint256).max);
 
         tokenA.approve(address(swapRouter), type(uint256).max);
         tokenB.approve(address(swapRouter), type(uint256).max);
-        stableCoin.approve(address(swapRouter), type(uint256).max)
-        
-        tokenA.mint(msg.sender, 100 * 10 ** 18);
-        tokenB.mint(msg.sender, 100 * 10 ** 18);
-       
+        stableCoin.approve(address(swapRouter), type(uint256).max);
+
         vm.stopBroadcast();
         // Requires currency0 and currency1 to be set in base Deployers contract.
         //deployAndApprovePosm(manager);
@@ -70,14 +76,12 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
         _initPoolsForStableCoin();
         //seedBalance(alice);
         //approvePosmFor(alice);
-        
+
         // Mine for hook address
-        
 
         uint160 flags = uint160(Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_SWAP_FLAG);
         address hookAddress = address(flags);
 
-        
         /**address CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
         (address hookAddress, bytes32 salt) = HookMiner.find(
             CREATE2_DEPLOYER,
@@ -85,22 +89,6 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
             type(PoolPartyDynamicShieldHook).creationCode,
             abi.encode(address(manager))
         );**/
-
-        vm.startBroadcast();
-        PoolPartyDynamicShieldHook hook = new PoolPartyDynamicShieldHook{salt: salt}(manager);
-        require(address(hook) == hookAddress, "hook address mismatch");
-
-        key = PoolKey({
-            currency0: token0,
-            currency1: token1,
-            fee: 3000,
-            tickSpacing: 120,
-            hooks: hook
-        });
-
-        // the second argument here is SQRT_PRICE_1_1
-        manager.initialize(key, 79228162514264337593543950336);
-        vm.stopBroadcast();
     }
 
     function run() public {
@@ -119,7 +107,7 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
     }
 
     function _initPoolsForStableCoin() internal {
-         // Load configuration from environment or hardcode for testing
+        // Load configuration from environment or hardcode for testing
         uint256 usdcAmount = 2000000e6;
         uint24 fee = 3000;
 
@@ -129,9 +117,18 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
         USDC.mint(msg.sender, usdcAmount);
 
         // Approve tokens for liquidity router
-        IERC20(address(USDC)).approve(address(modifyLiquidityRouter), type(uint256).max);
-        IERC20(Currency.unwrap(token0)).approve(address(modifyLiquidityRouter), type(uint256).max);
-        IERC20(Currency.unwrap(token1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(address(USDC)).approve(
+            address(modifyLiquidityRouter),
+            type(uint256).max
+        );
+        IERC20(Currency.unwrap(token0)).approve(
+            address(modifyLiquidityRouter),
+            type(uint256).max
+        );
+        IERC20(Currency.unwrap(token1)).approve(
+            address(modifyLiquidityRouter),
+            type(uint256).max
+        );
 
         // Initialize token0/USDC pool and add liquidity
         PoolKey memory token0USDCKey = initPoolUnsorted(
@@ -139,7 +136,7 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
             stableCoin,
             IHooks(address(0)),
             fee,
-            SQRT_PRICE_1_1
+            Constants.SQRT_PRICE_1_1
         );
         modifyLiquidityRouter.modifyLiquidity(
             token0USDCKey,
@@ -149,7 +146,7 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
                 liquidityDelta: 1000e6,
                 salt: bytes32(0)
             }),
-            ZERO_BYTES
+            Constants.ZERO_BYTES
         );
 
         // Initialize token1/USDC pool and add liquidity
@@ -158,7 +155,7 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
             token1,
             IHooks(address(0)),
             fee,
-            SQRT_PRICE_1_1
+            Constants.SQRT_PRICE_1_1
         );
         modifyLiquidityRouter.modifyLiquidity(
             token1USDCKey,
@@ -168,7 +165,7 @@ contract DeployPoolPartyDynamicShieldHook is Script, PosmTestSetup {
                 liquidityDelta: 2000e6,
                 salt: bytes32(0)
             }),
-            ZERO_BYTES
+            Constants.ZERO_BYTES
         );
 
         vm.stopBroadcast();
