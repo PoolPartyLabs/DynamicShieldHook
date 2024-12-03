@@ -1,34 +1,60 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
-import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+/** Forge */
+import {IERC721} from "forge-std/interfaces/IERC721.sol";
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
+
+/** Uniswap v4 Core */
+import {Currency, CurrencyLibrary} from "v4-core/src/types/Currency.sol";
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
+import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+import {SqrtPriceMath} from "v4-core/src/libraries/SqrtPriceMath.sol";
+import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
+import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
+
+/** Uniswap v4 Periphery */
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
-import {Hooks} from "v4-core/libraries/Hooks.sol";
-import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {PositionInfo} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
-import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
-import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
-import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
-import {TickMath} from "v4-core/libraries/TickMath.sol";
-import {SqrtPriceMath} from "v4-core/libraries/SqrtPriceMath.sol";
-import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
+import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
+import {PositionInfo, PositionInfoLibrary} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
+
+/** Intenral */
 import {PoolVaultManager} from "./PoolVaultManager.sol";
-import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
+
+import {console} from "forge-std/Test.sol";
 
 contract PoolPartyDynamicShieldHook is BaseHook {
+    using CurrencyLibrary for Currency;
+    using StateLibrary for IPoolManager;
+    using PoolIdLibrary for PoolKey;
+    using SqrtPriceMath for uint160;
+
     IPositionManager s_positionManager;
     PoolVaultManager s_vaultManager;
+    IAllowanceTransfer s_permit2;
     mapping(PoolId => ShieldInfo) public shieldInfos;
     mapping(PoolId => int24) public lastTicks;
     mapping(PoolId => uint24) public lastFees;
+    mapping(PoolId => uint256[]) public tokenIds;
 
     struct CallData {
         PoolKey key;
         uint24 feeInit;
         uint24 feeMax;
         TickSpacing tickSpacing;
+        Currency safeToken;
+    }
+
+    enum TickSpacing {
+        Low, // 10
+        Medium, // 50
+        High // 200
     }
 
     struct ShieldInfo {
@@ -36,12 +62,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         uint24 feeInit; // Minimum fee
         uint24 feeMax; // Maximum fee
         uint256 tokenId; // Associated token ID
-    }
-
-    enum TickSpacing {
-        Low, // 10
-        Medium, // 50
-        High // 200
+        Currency safeToken;
     }
 
     // Errors
@@ -62,10 +83,17 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     // Initialize BaseHook parent contract in the constructor
     constructor(
         IPoolManager _poolManager,
-        IPositionManager _positionManager
+        IPositionManager _positionManager,
+        IAllowanceTransfer _permit2
     ) BaseHook(_poolManager) {
         s_positionManager = _positionManager;
-        s_vaultManager = new PoolVaultManager(address(this), _positionManager);
+        s_vaultManager = new PoolVaultManager(
+            _poolManager,
+            _positionManager,
+            _permit2,
+            address(this)
+        );
+        s_permit2 = _permit2;
     }
 
     // Required override function for BaseHook to let the PoolManager know which hooks are implemented
@@ -96,6 +124,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
     function initializeShieldTokenHolder(
         PoolKey calldata _poolKey,
+        Currency _safeToken,
         TickSpacing _tickSpacing,
         uint24 _feeInit,
         uint24 _feeMax,
@@ -110,7 +139,8 @@ contract PoolPartyDynamicShieldHook is BaseHook {
                     key: _poolKey,
                     feeInit: _feeInit,
                     feeMax: _feeMax,
-                    tickSpacing: _tickSpacing
+                    tickSpacing: _tickSpacing,
+                    safeToken: _safeToken
                 })
             )
         );
@@ -118,8 +148,8 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
     function beforeSwap(
         address,
-        PoolKey calldata poolKey,
-        IPoolManager.SwapParams calldata params,
+        PoolKey calldata _poolKey,
+        IPoolManager.SwapParams calldata _params,
         bytes calldata
     )
         external
@@ -127,14 +157,32 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         onlyPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        PoolId poolId = PoolIdLibrary.toId(poolKey);
-        (uint160 currentSqrtPriceX96, , , ) = StateLibrary.getSlot0(
-            poolManager,
-            poolId
-        );
-        uint24 fee = getFee(poolKey, currentSqrtPriceX96);
-        poolManager.updateDynamicLPFee(poolKey, fee);
+        PoolId poolId = _poolKey.toId();
+        (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
+        uint24 fee = getFee(_poolKey, currentSqrtPriceX96);
+
+        poolManager.updateDynamicLPFee(_poolKey, fee);
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
+
+        uint128 liquidity = poolManager.getLiquidity(poolId);
+        console.log("beforeSwap.liquidity", liquidity);
+        console.log("beforeSwap._params.zeroForOne", _params.zeroForOne);
+
+        uint160 nextSqrtPriceX96 = currentSqrtPriceX96
+            .getNextSqrtPriceFromAmount0RoundingUp(
+                liquidity,
+                uint256(_params.amountSpecified),
+                !_params.zeroForOne
+            );
+
+        int24 nextTick = getTickFromSqrtPrice(nextSqrtPriceX96);
+
+
+        console.log("beforeSwap.nextTick", nextTick);
+
+        // Emit tick event
+        emit TickEvent(poolId, nextTick);
+
         return (
             this.beforeSwap.selector,
             BeforeSwapDeltaLibrary.ZERO_DELTA,
@@ -151,22 +199,18 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     ) external override returns (bytes4, int128) {
         //TODO Check events/parameters and if it should be here.
         // Get last tick
-        PoolId poolId = PoolIdLibrary.toId(_poolKey);
+        PoolId poolId = _poolKey.toId();
+        (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
         int24 lastTick = lastTicks[poolId];
 
-        // Emit tick event
-        emit TickEvent(poolId, lastTick);
+        // console.log("afterSwap.lastTick", lastTick);
 
-        // Get ShieldInfo for the current pool
-        ShieldInfo memory shieldInfo = shieldInfos[poolId];
-
-        // Emit Register Shield event (FeeMax, TokenHold, TokenId)
-        emit RegisterShieldEvent(
-            poolId,
-            shieldInfo.feeMax,
-            shieldInfo.tokenId,
-            msg.sender // The operator who initiated the swap
-        );
+        int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
+        // console.log("afterSwap.currentTick", currentTick);
+        if (currentTick == -5) {
+            uint256[] memory _tokenIds = tokenIds[poolId];
+            s_vaultManager.removeLiquidityInBatch(_poolKey, _tokenIds);
+        }
 
         return (this.afterSwap.selector, 0);
     }
@@ -183,37 +227,106 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         if (_operator != address(this)) revert InvalidSelf();
 
         CallData memory data = abi.decode(_data, (CallData));
+        PoolId poolId = data.key.toId();
 
-        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
-            _tokenId
-        );
+        // (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
+        //     _tokenId
+        // );
 
-        PoolId poolId = PoolIdLibrary.toId(data.key);
         shieldInfos[poolId] = ShieldInfo({
             tickSpacing: data.tickSpacing,
             feeInit: data.feeInit,
             feeMax: data.feeMax,
-            tokenId: _tokenId
+            tokenId: _tokenId,
+            safeToken: data.safeToken
         });
 
         IERC721(address(s_positionManager)).approve(
             address(s_vaultManager),
             _tokenId
         );
-        s_vaultManager.depositPosition(data.key, _tokenId, _from);
+        s_vaultManager.depositPosition(
+            data.key,
+            data.safeToken,
+            _tokenId,
+            _from
+        );
+
+        tokenIds[data.key.toId()].push(_tokenId);
+
+        // Emit Register Shield event (FeeMax, TokenHold, TokenId)
+        emit RegisterShieldEvent(
+            poolId,
+            data.feeMax,
+            _tokenId,
+            _from // The operator who initiated the swap
+        );
 
         return this.onERC721Received.selector;
     }
 
+    function addLiquidty(
+        PoolKey calldata _poolKey,
+        uint256 _tokenId,
+        uint256 _amount0,
+        uint256 _amount1,
+        uint256 _deadline
+    ) external {
+        IERC20(Currency.unwrap(_poolKey.currency0)).transferFrom(
+            msg.sender,
+            address(this),
+            _amount0
+        );
+        IERC20(Currency.unwrap(_poolKey.currency1)).transferFrom(
+            msg.sender,
+            address(this),
+            _amount1
+        );
+        IERC20(Currency.unwrap(_poolKey.currency0)).approve(
+            address(s_vaultManager),
+            _amount0
+        );
+        IERC20(Currency.unwrap(_poolKey.currency1)).approve(
+            address(s_vaultManager),
+            _amount1
+        );
+        s_vaultManager.addLiquidity(
+            _poolKey,
+            _tokenId,
+            _amount0,
+            _amount1,
+            _deadline
+        );
+    }
+
+    function removeLiquidity(
+        PoolKey memory _key,
+        uint256 _tokenId,
+        uint128 _percentage,
+        uint256 _deadline
+    ) external {
+        s_vaultManager.removeLiquidity(_key, _tokenId, _percentage, _deadline);
+    }
+
+    function collectFees(
+        PoolKey memory _key,
+        uint256 _tokenId,
+        uint256 _deadline
+    ) external {
+        s_vaultManager.collectFees(_key, _tokenId, _deadline);
+    }
+
+    function getVaulManagerAddress() public view returns (address) {
+        return address(s_vaultManager);
+    }
+
     function getFee(
-        PoolKey calldata poolKey,
-        uint160 sqrtPriceX96
+        PoolKey calldata _poolKey,
+        uint160 _sqrtPriceX96
     ) internal returns (uint24) {
-        PoolId poolId = PoolIdLibrary.toId(poolKey);
-        // Get the current sqrtPrice
-        uint160 currentSqrtPriceX96 = sqrtPriceX96;
+        PoolId poolId = _poolKey.toId();
         // Get the current tick value from sqrtPriceX96
-        int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
+        int24 currentTick = getTickFromSqrtPrice(_sqrtPriceX96);
 
         // Ensure `lastTicks` is initialized
         int24 lastTick = lastTicks[poolId];
@@ -265,27 +378,27 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     }
 
     function getTickFromSqrtPrice(
-        uint160 sqrtPriceX96
-    ) public pure returns (int24 tickValue) {
+        uint160 _sqrtPriceX96
+    ) internal pure returns (int24 tickValue) {
         // Ensure the sqrtPriceX96 value is within the valid range
         require(
-            sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE &&
-                sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE,
+            _sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE &&
+                _sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE,
             "sqrtPriceX96 out of range"
         );
 
         // Calculate the tick value using TickMath
-        tickValue = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+        tickValue = TickMath.getTickAtSqrtPrice(_sqrtPriceX96);
     }
 
     function getTickSpacingValue(
-        TickSpacing tickSpacing
-    ) public pure returns (int24) {
-        if (tickSpacing == TickSpacing.Low) {
+        TickSpacing _tickSpacing
+    ) internal pure returns (int24) {
+        if (_tickSpacing == TickSpacing.Low) {
             return 10;
-        } else if (tickSpacing == TickSpacing.Medium) {
+        } else if (_tickSpacing == TickSpacing.Medium) {
             return 50;
-        } else if (tickSpacing == TickSpacing.High) {
+        } else if (_tickSpacing == TickSpacing.High) {
             return 200;
         }
         revert("Invalid TickSpacing");
