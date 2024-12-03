@@ -177,7 +177,6 @@ contract PoolPartyDynamicShieldHook is BaseHook {
 
         int24 nextTick = getTickFromSqrtPrice(nextSqrtPriceX96);
 
-
         console.log("beforeSwap.nextTick", nextTick);
 
         // Emit tick event
@@ -201,7 +200,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         // Get last tick
         PoolId poolId = _poolKey.toId();
         (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
-        int24 lastTick = lastTicks[poolId];
+        //int24 lastTick = lastTicks[poolId];
 
         // console.log("afterSwap.lastTick", lastTick);
 
