@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
+/** OpenZeppelin Contracts */
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
+/** Solmate */
 import {SafeTransferLib} from "solmate/src/utils/SafeTransferLib.sol";
 import {ERC20} from "solmate/src/tokens/ERC20.sol";
 
@@ -21,7 +25,6 @@ import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {PositionInfo, PositionInfoLibrary} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
-import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 import {CalldataDecoder} from "v4-periphery/src/libraries/CalldataDecoder.sol";
 
@@ -35,7 +38,7 @@ import {console} from "forge-std/Test.sol";
 
 bytes constant ZERO_BYTES = new bytes(0);
 
-contract PoolVaultManager is V4Router {
+contract PoolVaultManager is V4Router, Ownable {
     using PoolIdLibrary for PoolKey;
     using Planner for Plan;
     using StateLibrary for IPoolManager;
@@ -48,7 +51,6 @@ contract PoolVaultManager is V4Router {
         PoolKey key;
         address owner;
         uint256 tokenId;
-        Currency safeToken;
     }
 
     struct PositionTotalSupply {
@@ -61,47 +63,40 @@ contract PoolVaultManager is V4Router {
     struct CallData {
         PoolKey key;
         address owner;
-        Currency safeToken;
     }
 
     IPositionManager private s_lpm;
-    IAllowanceTransfer s_permit2;
-    address private s_hook;
+    IAllowanceTransfer private s_permit2;
+    Currency private s_safeToken;
     mapping(uint256 tokenId => Position) private s_postions;
+    mapping(PoolId => PoolKey) private s_poolKeys;
 
     error InvalidPositionManager();
     error InvalidHook();
     error InvalidSelf();
 
-    modifier onlyHook() {
-        if (msg.sender != s_hook) revert InvalidHook();
-        _;
-    }
-
     constructor(
         IPoolManager _pm,
         IPositionManager _lpm,
         IAllowanceTransfer _permit2,
+        Currency _safeToken,
         address _hook
-    ) V4Router(_pm) {
-        s_hook = _hook;
+    ) V4Router(_pm) Ownable(_hook) {
         s_lpm = _lpm;
         s_permit2 = _permit2;
+        s_safeToken = _safeToken;
     }
 
     function depositPosition(
         PoolKey calldata _key,
-        Currency _safeToken,
         uint256 _tokenId,
         address _owner
-    ) external payable onlyHook {
+    ) external payable onlyOwner {
         IERC721(address(s_lpm)).safeTransferFrom(
             msg.sender,
             address(this),
             _tokenId,
-            abi.encode(
-                CallData({key: _key, owner: _owner, safeToken: _safeToken})
-            )
+            abi.encode(CallData({key: _key, owner: _owner}))
         );
     }
 
@@ -113,16 +108,12 @@ contract PoolVaultManager is V4Router {
     ) external returns (bytes4) {
         // Check if the sender is the hook
         if (msg.sender != address(s_lpm)) revert InvalidPositionManager();
-        if (_from != s_hook) revert InvalidHook();
+        if (_from != owner()) revert InvalidHook();
         if (_operator != address(this)) revert InvalidSelf();
 
         CallData memory data = abi.decode(_data, (CallData));
-        s_postions[_tokenId] = Position(
-            data.key,
-            data.owner,
-            _tokenId,
-            data.safeToken
-        );
+        s_postions[_tokenId] = Position(data.key, data.owner, _tokenId);
+        s_poolKeys[data.key.toId()] = data.key;
 
         return this.onERC721Received.selector;
     }
@@ -137,7 +128,7 @@ contract PoolVaultManager is V4Router {
         uint256 _amount0,
         uint256 _amount1,
         uint256 _deadline
-    ) external onlyHook {
+    ) external onlyOwner {
         IERC20(Currency.unwrap(_key.currency0)).transferFrom(
             msg.sender,
             address(this),
@@ -178,7 +169,7 @@ contract PoolVaultManager is V4Router {
         uint256 _tokenId,
         uint128 _percentage,
         uint256 _deadline
-    ) external onlyHook {
+    ) external onlyOwner {
         require(_percentage > 0 && _percentage <= 100e4, "Invalid percentage");
 
         (uint256 amount0, uint256 amount1) = _removeLiquidity(
@@ -199,7 +190,7 @@ contract PoolVaultManager is V4Router {
         PoolKey memory _key,
         uint256 _tokenId,
         uint256 _deadline
-    ) external {
+    ) external onlyOwner {
         uint256 beforeBalance0 = _key.currency0.balanceOfSelf();
         uint256 beforeBalance1 = _key.currency1.balanceOfSelf();
 
@@ -225,30 +216,30 @@ contract PoolVaultManager is V4Router {
     }
 
     function removeLiquidityInBatch(
-        PoolKey calldata _key,
+        PoolId poolId,
         uint256[] calldata _tokenIds
     ) external {
         uint256 tokenIdsLength = _tokenIds.length;
         require(tokenIdsLength <= 500, "Too many tokenIds");
-
+        PoolKey memory poolKey = s_poolKeys[poolId];
         for (uint256 i = 0; i < tokenIdsLength; i++) {
             uint256 tonekId = _tokenIds[i];
             (uint256 amount0, uint256 amount1) = _removeLiquidity(
-                _key,
+                poolKey,
                 tonekId,
                 99e4, // 99%
                 0,
                 true
             );
-            _swapExactInputSingle(
-                _key.currency0,
+            _swapToSafeToken(
+                poolKey.currency0,
                 tonekId,
                 amount0,
                 address(this)
             );
 
-            _swapExactInputSingle(
-                _key.currency1,
+            _swapToSafeToken(
+                poolKey.currency1,
                 tonekId,
                 amount1,
                 address(this)
@@ -361,17 +352,16 @@ contract PoolVaultManager is V4Router {
         }
     }
 
-    function _swapExactInputSingle(
+    function _swapToSafeToken(
         Currency _currencyIn,
         uint256 _tokenId,
         uint256 _amountIn,
         address _recipient
     ) private {
-        Currency safeToken = s_postions[_tokenId].safeToken;
         // @todo should be removed in production and use multiple pathkeys
         PoolKey memory poolKeyCurrencyToUSDC = _poolKeyUnsorted(
             _currencyIn,
-            safeToken,
+            s_safeToken,
             IHooks(address(0)),
             3000,
             60
@@ -398,7 +388,7 @@ contract PoolVaultManager is V4Router {
 
         bytes memory data = planner.finalizeSwap(
             _currencyIn,
-            safeToken,
+            s_safeToken,
             _recipient
         );
 

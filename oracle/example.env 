@@ -1,0 +1,24 @@
+RPC_PROVIDER=http://localhost:8545
+CONTRACT=
+DB_USER=your_database_user
+DB_PWD=your_database_password
+DB_DATABSE=blockchain_test
+DB_PORT=5432
+DB_HOST=db
+DB_URI=postgresql://$DB_USER:$DB_PWD@$DB_HOST:$DB_PORT/$DB_DATABSE
+NO_SSL=true
+
+ 
+export RPC_PROVIDER=http://localhost:8545
+export CONTRACT=
+export PRIV_KEY_ORACLE=0x000
+export DB_USER=your_database_user
+export DB_PWD=your_database_password
+export DB_DATABSE=blockchain_test
+export DB_PORT=5432
+export DB_HOST=localhost
+export DB_URI=postgresql://$DB_USER:$DB_PWD@$DB_HOST:$DB_PORT/$DB_DATABSE
+export NO_SSL=true
+
+
+ 

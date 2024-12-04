@@ -77,11 +77,17 @@ abstract contract TestHelper is PosmTestSetup {
         approvePosmFor(alice);
 
         // Deploy our hook
-        uint160 flags = uint160(Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_SWAP_FLAG);
+        uint160 flags = uint160(
+            Hooks.BEFORE_INITIALIZE_FLAG |
+                Hooks.BEFORE_SWAP_FLAG |
+                Hooks.AFTER_SWAP_FLAG
+        );
         address hookAddress = address(flags);
+        uint24 _feeInit = 500; // 0.05%
+        uint24 _feeMax = 10000; // 1%
         deployCodeTo(
             "PoolPartyDynamicShieldHook.sol",
-            abi.encode(manager, lpm, permit2),
+            abi.encode(manager, lpm, permit2, stableCoin, _feeInit, _feeMax),
             hookAddress
         );
         s_shieldHook = PoolPartyDynamicShieldHook(hookAddress);
@@ -298,10 +304,15 @@ abstract contract TestHelper is PosmTestSetup {
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
             amountSpecified: -100 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            sqrtPriceLimitX96:  TickMath.MIN_SQRT_PRICE + 1
         });
 
         for (uint256 i = 0; i < poolsLength; i++) {
+            // if (i % 2 == 0) {
+            //     params.zeroForOne = false;
+            // } else {
+            //     params.zeroForOne = true;
+            // }
             params.amountSpecified = _amounts[i];
             swapRouter.swap(_pools[i], params, testSettings, ZERO_BYTES);
         }

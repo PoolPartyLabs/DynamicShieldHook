@@ -1,14 +1,11 @@
 import PgBoss from "pg-boss";
+import { DB_URI } from "./constants";
 
 const boss = new PgBoss({
-  host: "127.0.0.1",
-  port: 5432,
-  database: "blockchain_test",
-  user: "your_database_user",
-  password: "your_database_password",
+  connectionString: DB_URI,
 });
 
-export const queueName = "blockchain-event";
+export const queueName = "tick-event";
 
 async function initBoss() {
   await boss.start();

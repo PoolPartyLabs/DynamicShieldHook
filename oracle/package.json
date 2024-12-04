@@ -2,10 +2,10 @@
   "name": "docker-node-oracle",
   "version": "1.0.0",
   "description": "A simple Node.js Oracle with Docker",
-  "main": "server.ts",
+  "main": "listener.ts",
   "type": "module",
   "scripts": {
-    "start": "npx tsx server.ts",
+    "listener": "npx tsx listener.ts",
     "worker": "npx tsx worker.ts",
     "migrate": "npx knex migrate:latest --knexfile ./knexfile.cjs"
   },
