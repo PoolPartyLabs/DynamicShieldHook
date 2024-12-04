@@ -34,38 +34,43 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     using SqrtPriceMath for uint160;
+    using PositionInfoLibrary for PositionInfo;
+    using LPFeeLibrary for uint24;
 
     IPositionManager s_positionManager;
     PoolVaultManager s_vaultManager;
     IAllowanceTransfer s_permit2;
-    mapping(PoolId => ShieldInfo) public shieldInfos;
-    mapping(PoolId => int24) public lastTicks;
-    mapping(PoolId => uint24) public lastFees;
-    mapping(PoolId => uint256[]) public tokenIds;
+    uint24 public s_feeInit;
+    uint24 public s_feeMax;
+    mapping(PoolId => ShieldInfo) public s_shieldInfos;
+    mapping(PoolId => uint256[]) public s_tokenIds;
+    mapping(PoolId => mapping(int24 tick => TickInfo)) public s_tickInfos;
+
+    struct TickInfo {
+        PoolId poolId;
+        int24 tick;
+        uint128 liquidity;
+        uint24 fee;
+    }
 
     struct CallData {
         PoolKey key;
-        uint24 feeInit;
-        uint24 feeMax;
-        TickSpacing tickSpacing;
-        Currency safeToken;
-    }
-
-    enum TickSpacing {
-        Low, // 10
-        Medium, // 50
-        High // 200
     }
 
     struct ShieldInfo {
-        TickSpacing tickSpacing; // Enum for tick space
-        uint24 feeInit; // Minimum fee
-        uint24 feeMax; // Maximum fee
-        uint256 tokenId; // Associated token ID
-        Currency safeToken;
+        uint256 tokenId;
+    }
+
+    enum TickSpacing {
+        Invalid, // 0
+        Low, // 10
+        Medium, // 60
+        High // 200
     }
 
     // Errors
+    error MustUseDynamicFee();
+    error InvalidTickSpacing();
     error InvalidPositionManager();
     error InvalidSelf();
 
@@ -84,16 +89,22 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     constructor(
         IPoolManager _poolManager,
         IPositionManager _positionManager,
-        IAllowanceTransfer _permit2
+        IAllowanceTransfer _permit2,
+        Currency _safeToken,
+        uint24 _feeInit,
+        uint24 _feeMax
     ) BaseHook(_poolManager) {
         s_positionManager = _positionManager;
         s_vaultManager = new PoolVaultManager(
             _poolManager,
             _positionManager,
             _permit2,
+            _safeToken,
             address(this)
         );
         s_permit2 = _permit2;
+        s_feeInit = _feeInit;
+        s_feeMax = _feeMax;
     }
 
     // Required override function for BaseHook to let the PoolManager know which hooks are implemented
@@ -105,7 +116,7 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     {
         return
             Hooks.Permissions({
-                beforeInitialize: false,
+                beforeInitialize: true,
                 afterInitialize: false,
                 beforeAddLiquidity: false,
                 beforeRemoveLiquidity: false,
@@ -122,28 +133,29 @@ contract PoolPartyDynamicShieldHook is BaseHook {
             });
     }
 
-    function initializeShieldTokenHolder(
+    function initializeShield(
         PoolKey calldata _poolKey,
-        Currency _safeToken,
-        TickSpacing _tickSpacing,
-        uint24 _feeInit,
-        uint24 _feeMax,
         uint256 _tokenId
     ) external {
         IERC721(address(s_positionManager)).safeTransferFrom(
             msg.sender,
             address(this),
             _tokenId,
-            abi.encode(
-                CallData({
-                    key: _poolKey,
-                    feeInit: _feeInit,
-                    feeMax: _feeMax,
-                    tickSpacing: _tickSpacing,
-                    safeToken: _safeToken
-                })
-            )
+            abi.encode(_poolKey)
         );
+    }
+
+    function beforeInitialize(
+        address,
+        PoolKey calldata key,
+        uint160
+    ) external pure override returns (bytes4) {
+        // `.isDynamicFee()` function comes from using
+        // the `SwapFeeLibrary` for `uint24`
+        if (!key.fee.isDynamicFee()) revert MustUseDynamicFee();
+        // revert if the tickSpacing is not valid
+        isValidTickSpacing(key.tickSpacing);
+        return this.beforeInitialize.selector;
     }
 
     function beforeSwap(
@@ -159,7 +171,10 @@ contract PoolPartyDynamicShieldHook is BaseHook {
     {
         PoolId poolId = _poolKey.toId();
         (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
-        uint24 fee = getFee(_poolKey, currentSqrtPriceX96);
+        int24 currentTick = TickMath.getTickAtSqrtPrice(currentSqrtPriceX96);
+
+        TickInfo memory tickInfo = s_tickInfos[poolId][currentTick];
+        uint24 fee = tickInfo.fee;
 
         poolManager.updateDynamicLPFee(_poolKey, fee);
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
@@ -167,21 +182,24 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         uint128 liquidity = poolManager.getLiquidity(poolId);
         console.log("beforeSwap.liquidity", liquidity);
         console.log("beforeSwap._params.zeroForOne", _params.zeroForOne);
+        console.log(
+            "beforeSwap._params.amountSpecified",
+            _params.amountSpecified
+        );
+        console.log("beforeSwap.currentTick", currentTick);
 
-        uint160 nextSqrtPriceX96 = currentSqrtPriceX96
-            .getNextSqrtPriceFromAmount0RoundingUp(
-                liquidity,
-                uint256(_params.amountSpecified),
-                !_params.zeroForOne
-            );
+        // uint160 nextSqrtPriceX96 = currentSqrtPriceX96
+        //     .getNextSqrtPriceFromInput(
+        //         liquidity,
+        //         uint256(_params.amountSpecified),
+        //         _params.zeroForOne
+        //     );
 
-        int24 nextTick = getTickFromSqrtPrice(nextSqrtPriceX96);
-
-
-        console.log("beforeSwap.nextTick", nextTick);
+        // int24 nextTick = TickMath.getTickAtSqrtPrice(nextSqrtPriceX96);
+        // console.log("beforeSwap.nextTick", nextTick);
 
         // Emit tick event
-        emit TickEvent(poolId, nextTick);
+        emit TickEvent(poolId, currentTick);
 
         return (
             this.beforeSwap.selector,
@@ -197,19 +215,14 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         BalanceDelta,
         bytes calldata
     ) external override returns (bytes4, int128) {
-        //TODO Check events/parameters and if it should be here.
-        // Get last tick
         PoolId poolId = _poolKey.toId();
         (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
-        int24 lastTick = lastTicks[poolId];
 
-        // console.log("afterSwap.lastTick", lastTick);
-
-        int24 currentTick = getTickFromSqrtPrice(currentSqrtPriceX96);
-        // console.log("afterSwap.currentTick", currentTick);
-        if (currentTick == -5) {
-            uint256[] memory _tokenIds = tokenIds[poolId];
-            s_vaultManager.removeLiquidityInBatch(_poolKey, _tokenIds);
+        int24 currentTick = TickMath.getTickAtSqrtPrice(currentSqrtPriceX96);
+        console.log("afterSwap.currentTick", currentTick);
+        if (currentTick == -2) {
+            uint256[] memory _tokenIds = s_tokenIds[poolId];
+            s_vaultManager.removeLiquidityInBatch(poolId, _tokenIds);
         }
 
         return (this.afterSwap.selector, 0);
@@ -221,46 +234,38 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         uint256 _tokenId,
         bytes calldata _data
     ) external returns (bytes4) {
-        // Check if the sender is the position manager
         if (msg.sender != address(s_positionManager))
             revert InvalidPositionManager();
         if (_operator != address(this)) revert InvalidSelf();
 
-        CallData memory data = abi.decode(_data, (CallData));
-        PoolId poolId = data.key.toId();
+        PoolKey memory poolKey = abi.decode(_data, (PoolKey));
+        PoolId poolId = poolKey.toId();
 
-        // (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
-        //     _tokenId
-        // );
+        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
+            _tokenId
+        );
+        uint128 liquidity = s_positionManager.getPositionLiquidity(_tokenId);
 
-        shieldInfos[poolId] = ShieldInfo({
-            tickSpacing: data.tickSpacing,
-            feeInit: data.feeInit,
-            feeMax: data.feeMax,
-            tokenId: _tokenId,
-            safeToken: data.safeToken
-        });
+        calcNewFeePerTick(
+            poolId,
+            liquidity,
+            info.tickLower(),
+            info.tickUpper(),
+            s_feeInit,
+            s_feeMax
+        );
+
+        s_shieldInfos[poolId] = ShieldInfo({tokenId: _tokenId});
 
         IERC721(address(s_positionManager)).approve(
             address(s_vaultManager),
             _tokenId
         );
-        s_vaultManager.depositPosition(
-            data.key,
-            data.safeToken,
-            _tokenId,
-            _from
-        );
+        s_vaultManager.depositPosition(poolKey, _tokenId, _from);
 
-        tokenIds[data.key.toId()].push(_tokenId);
+        s_tokenIds[poolId].push(_tokenId);
 
-        // Emit Register Shield event (FeeMax, TokenHold, TokenId)
-        emit RegisterShieldEvent(
-            poolId,
-            data.feeMax,
-            _tokenId,
-            _from // The operator who initiated the swap
-        );
+        emit RegisterShieldEvent(poolId, s_feeMax, _tokenId, _from);
 
         return this.onERC721Received.selector;
     }
@@ -297,15 +302,46 @@ contract PoolPartyDynamicShieldHook is BaseHook {
             _amount1,
             _deadline
         );
+        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
+            _tokenId
+        );
+        uint128 liquidity = s_positionManager.getPositionLiquidity(_tokenId);
+
+        calcNewFeePerTick(
+            _poolKey.toId(),
+            liquidity,
+            info.tickLower(),
+            info.tickUpper(),
+            s_feeInit,
+            s_feeMax
+        );
     }
 
     function removeLiquidity(
-        PoolKey memory _key,
+        PoolKey memory _poolKey,
         uint256 _tokenId,
         uint128 _percentage,
         uint256 _deadline
     ) external {
-        s_vaultManager.removeLiquidity(_key, _tokenId, _percentage, _deadline);
+        s_vaultManager.removeLiquidity(
+            _poolKey,
+            _tokenId,
+            _percentage,
+            _deadline
+        );
+        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
+            _tokenId
+        );
+        uint128 liquidity = s_positionManager.getPositionLiquidity(_tokenId);
+
+        calcNewFeePerTick(
+            _poolKey.toId(),
+            liquidity,
+            info.tickLower(),
+            info.tickUpper(),
+            s_feeInit,
+            s_feeMax
+        );
     }
 
     function collectFees(
@@ -320,87 +356,87 @@ contract PoolPartyDynamicShieldHook is BaseHook {
         return address(s_vaultManager);
     }
 
-    function getFee(
-        PoolKey calldata _poolKey,
-        uint160 _sqrtPriceX96
-    ) internal returns (uint24) {
-        PoolId poolId = _poolKey.toId();
-        // Get the current tick value from sqrtPriceX96
-        int24 currentTick = getTickFromSqrtPrice(_sqrtPriceX96);
-
-        // Ensure `lastTicks` is initialized
-        int24 lastTick = lastTicks[poolId];
-
-        // Calculate diffTicks (absolute difference between currentTick and lastTick)
-        int24 diffTicks = currentTick > lastTick
-            ? currentTick - lastTick
-            : lastTick - currentTick;
-
-        // Ensure diffTicks is non-negative (redundant because the subtraction handles it)
-        require(diffTicks >= 0, "diffTicks cannot be negative");
-
-        int24 tickSpacing = getTickSpacingValue(
-            shieldInfos[poolId].tickSpacing
-        );
-
-        //TODO: Evaluate how to calculate tickLower
-        // Calculate tickLower and tickUpper
-        int24 tickLower = tickSpacing * (currentTick / tickSpacing);
-        int24 tickUpper = tickLower + tickSpacing; // Next tick boundary
-
-        // Calculate totalTicks (absolute difference between tickUpper and tickLower)
-        int24 totalTicks = tickUpper > tickLower
-            ? tickUpper - tickLower
-            : tickLower - tickUpper;
-
-        // Prevent totalTicks from being too small to avoid division issues
-        totalTicks = totalTicks < 2 ? int24(2) : totalTicks;
-
-        // Get fee
-        uint24 feeInit = shieldInfos[poolId].feeInit;
-        uint24 feeMax = shieldInfos[poolId].feeMax;
-
-        // Ensure FeeInit is less than or equal to feeMax
-        require(
-            feeMax >= feeInit,
-            "feeMax must be greater than or equal to initFee"
-        );
-        // Calculate the new fee
-        uint24 newFee = uint24(diffTicks) *
-            ((feeMax - feeInit) / uint24(totalTicks / 2));
-
-        //TODO: Check if set last fee and tick here
-        // Store last fee and tick
-        lastFees[poolId] = newFee;
-        lastTicks[poolId] = currentTick;
-
-        return newFee;
-    }
-
-    function getTickFromSqrtPrice(
-        uint160 _sqrtPriceX96
-    ) internal pure returns (int24 tickValue) {
-        // Ensure the sqrtPriceX96 value is within the valid range
-        require(
-            _sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE &&
-                _sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE,
-            "sqrtPriceX96 out of range"
-        );
-
-        // Calculate the tick value using TickMath
-        tickValue = TickMath.getTickAtSqrtPrice(_sqrtPriceX96);
-    }
-
     function getTickSpacingValue(
         TickSpacing _tickSpacing
     ) internal pure returns (int24) {
         if (_tickSpacing == TickSpacing.Low) {
             return 10;
         } else if (_tickSpacing == TickSpacing.Medium) {
-            return 50;
+            return 60;
         } else if (_tickSpacing == TickSpacing.High) {
             return 200;
         }
-        revert("Invalid TickSpacing");
+        revert InvalidTickSpacing();
+    }
+
+    function isValidTickSpacing(int24 _tickSpacing) internal pure {
+        if (_tickSpacing != 10 && _tickSpacing != 60 && _tickSpacing != 200) {
+            revert InvalidTickSpacing();
+        }
+    }
+
+    function calcFeesPerTicks(
+        uint24 _numTicks,
+        uint24 _fee0,
+        uint24 _feeMax
+    ) internal pure returns (uint24[] memory) {
+        uint24[] memory fees = new uint24[](_numTicks);
+        fees[0] = _feeMax;
+        fees[_numTicks - 1] = _feeMax;
+
+        if (_numTicks % 2 == 0) {
+            uint24 tickFee = _feeMax / (1 + (_numTicks - 2) / 2);
+            for (uint24 i = 1; i < _numTicks - 1; i++) {
+                fees[i] = tickFee;
+            }
+        } else {
+            uint24 middle = _numTicks / 2;
+            fees[middle] = _fee0;
+
+            uint24 feeInc = (_feeMax - _fee0) / (_numTicks - 1) / 2;
+            uint24 lastFee = _fee0;
+            for (uint24 i = middle + 1; i < _numTicks - 1; i++) {
+                fees[i] = lastFee + feeInc;
+                lastFee = fees[i];
+            }
+
+            lastFee = _fee0;
+            for (uint24 i = middle - 1; i > 0; i--) {
+                fees[i] = lastFee + feeInc;
+                lastFee = fees[i];
+            }
+        }
+        return fees;
+    }
+
+    function calcNewFeePerTick(
+        PoolId _poolId,
+        uint128 _liquidity,
+        int24 _tickLower,
+        int24 _tickUpper,
+        uint24 _fee0,
+        uint24 _feeMax
+    ) internal {
+        uint24 _numTicks = uint24(_tickUpper - _tickLower) + 1;
+        uint128 liqPerTick = (_liquidity / _numTicks);
+        uint24[] memory feesPerTicks = calcFeesPerTicks(
+            _numTicks,
+            _fee0,
+            _feeMax
+        );
+        uint24 tickIndex = 0;
+        for (int24 i = _tickLower; i <= _tickUpper; i++) {
+            TickInfo storage tickInfo = s_tickInfos[_poolId][i];
+
+            tickInfo.fee = uint24(
+                (feesPerTicks[tickIndex] * tickInfo.liquidity) +
+                    (_feeMax * liqPerTick)
+            );
+            if (tickInfo.fee > _feeMax) {
+                tickInfo.fee = _feeMax;
+            }
+            tickInfo.liquidity += liqPerTick;
+            tickIndex++;
+        }
     }
 }

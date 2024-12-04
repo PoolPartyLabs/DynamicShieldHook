@@ -86,16 +86,16 @@ contract PoolPartyDynamicShieldHookTest is TestHelper {
         for (uint256 i = 0; i < 10; i++) {
             pools[i] = key;
             if (i % 2 == 0) {
-                amounts[i] = 1e18 * int256(i + 1);
+                amounts[i] = 1e18;
             } else {
-                amounts[i] = -1e18 * int256(i + 2);
+                amounts[i] = -1e18;
             }
         }
         _swapMulti(pools, amounts);
 
         assertEq(1663396223366406680748, lpm.getPositionLiquidity(tokenId));
         assertEq(
-            0,
+            90502330118557331,
             IERC20(Currency.unwrap(token0)).balanceOf(
                 s_shieldHook.getVaulManagerAddress()
             )
@@ -117,20 +117,7 @@ contract PoolPartyDynamicShieldHookTest is TestHelper {
     function _initShield() internal {
         vm.startPrank(alice);
         IERC721(address(lpm)).approve(address(s_shieldHook), tokenId);
-        uint24 _feeInit = 3000;
-        uint24 _feeMax = 3000;
-        PoolPartyDynamicShieldHook.TickSpacing _tickSpacing = PoolPartyDynamicShieldHook
-                .TickSpacing
-                .Low;
-
-        s_shieldHook.initializeShieldTokenHolder(
-            key,
-            stableCoin,
-            _tickSpacing,
-            _feeInit,
-            _feeMax,
-            tokenId
-        );
+        s_shieldHook.initializeShield(key, tokenId);
         vm.stopPrank();
     }
 }
