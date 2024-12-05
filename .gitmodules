@@ -13,3 +13,11 @@
 [submodule "lib/solmate"]
 	path = lib/solmate
 	url = https://github.com/transmissions11/solmate
+[submodule "lib/eigenlayer-middleware"]
+	path = lib/eigenlayer-middleware
+	branch = 74438b7
+	url = https://github.com/Layr-Labs/eigenlayer-middleware
+[submodule "lib/eigenlayer-contracts"]
+	path = lib/eigenlayer-middleware
+	branch = 6c30b8ea
+	url = https://github.com/Layr-Labs/eigenlayer-contracts

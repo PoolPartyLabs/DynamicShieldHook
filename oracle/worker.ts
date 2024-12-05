@@ -1,26 +1,22 @@
 import boss, { queueName } from "./queue";
-import { createWalletClient, http, publicActions } from "viem";
-import { mainnet, foundry } from "viem/chains";
-import { privateKeyToAccount } from "viem/accounts";
+import { ethers } from "ethers";
 import { _knex } from "./repository";
-import { ABI } from "./ABI";
-import { RPC_PROVIDER, PRIVATE_KEY, CONTRACT } from "./constants";
-
-const account = privateKeyToAccount(PRIVATE_KEY);
-
-export const walletClient = createWalletClient({
-  account,
-  chain: foundry,
-  transport: http(RPC_PROVIDER),
-}).extend(publicActions);
+import {
+  registerOperator,
+  wallet,
+  provider,
+  poolVaultManager,
+} from "./eigenlayer";
 
 async function startWorker() {
+  await registerOperator();
+
   await boss.work(queueName, async ([job]) => {
     console.log(`received job ${job.id} with data ${JSON.stringify(job.data)}`);
     await boss.deleteJob(queueName, job.id);
 
     try {
-      const { poolId, currentTick } = job.data as any;
+      const { poolId, currentTick, taskIndex, task } = job.data as any;
       const tokenIds = await _knex("shields")
         .select("token_id")
         .where("pool_id", "=", poolId)
@@ -36,14 +32,35 @@ async function startWorker() {
       const bigIntTokenIds: BigInt[] = Array.from(new Set(stringTokenIds)).map(
         (tokenId) => BigInt(tokenId)
       );
-      const { request } = await walletClient.simulateContract({
-        address: CONTRACT,
-        abi: ABI,
-        functionName: "removeLiquidityInBatch",
-        args: [poolId, bigIntTokenIds],
-      });
-      const hash = await walletClient.writeContract(request); // Wallet Action
-      console.log(`transaction hash: ${hash}`);
+      
+      const messageHash = ethers.solidityPackedKeccak256(["bytes32"], [poolId]);
+      const messageBytes = ethers.getBytes(messageHash);
+      const signature = await wallet.signMessage(messageBytes);
+
+      console.log(`Signing and responding to task ${taskIndex}`);
+
+      const operators = [await wallet.getAddress()];
+      console.log(`operators ${operators}`);
+      const signatures = [signature];
+      const signedTask = ethers.AbiCoder.defaultAbiCoder().encode(
+        ["address[]", "bytes[]", "uint32"],
+        [
+          operators,
+          signatures,
+          ethers.toBigInt((await provider.getBlockNumber()) - 1),
+        ]
+      );
+
+      const tx = await poolVaultManager.removeLiquidityInBatch(
+        { taskIndex, poolId, taskCreatedBlock: task.taskCreatedBlock },
+        taskIndex,
+        bigIntTokenIds,
+        signedTask
+      );
+      const hash = await tx.wait();
+      console.log(`Responded to task.`);
+
+      console.log(`Transaction hash: ${hash.blockHash}`);
     } catch (error) {
       console.error(error);
     }

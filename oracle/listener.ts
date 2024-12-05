@@ -2,7 +2,7 @@ import { createPublicClient, http, parseAbiItem } from "viem";
 import { mainnet, foundry } from "viem/chains";
 import boss, { queueName } from "./queue";
 import { createTable, _knex } from "./repository";
-import { CONTRACT, RPC_PROVIDER } from './constants';
+import { CONTRACT, RPC_PROVIDER } from "./constants";
 
 const publicClient = createPublicClient({
   chain: foundry,
@@ -22,13 +22,17 @@ async function start() {
     pollingInterval: 5_000, // 5 seconds
     fromBlock: lastBlock,
     events: [
-      parseAbiItem("event TickEvent(bytes32 poolId, int24 currentTick)"),
+      parseAbiItem([
+        "event TickEvent(bytes32 indexed poolId, int24 indexed currentTick, uint32 indexed taskIndex, Task task)",
+        "struct Task { uint32 taskIndex;  bytes32 poolId;  uint32 taskCreatedBlock; }",
+      ]),
       parseAbiItem(
         "event RegisterShieldEvent(bytes32 poolId, int24 feeMaxLow, int24 feeMaxUpper, uint256 tokenId, address owner)"
       ),
     ],
     onLogs: async (logs) => {
-      console.log(`lastBlock: ${lastBlock}`); 
+      console.log(logs);
+      console.log(`lastBlock: ${lastBlock}`);
       const log = logs?.length > 1 ? logs[logs?.length - 1] : logs[0];
       const { blockNumber, args, eventName } = log;
       lastBlock = blockNumber;
@@ -37,10 +41,14 @@ async function start() {
       if (eventName === "TickEvent") {
         const poolId = args.poolId;
         const currentTick = args.currentTick;
+        const taskIndex = args.taskIndex;
+        const task = args.task;
         console.log(`poolId: ${poolId}, currentTick: ${currentTick}`);
         const id = await boss.send(queueName, {
           poolId,
           currentTick,
+          taskIndex,
+          task,
         });
 
         console.log(`created job ${id} in queue ${queueName}`);

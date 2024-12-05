@@ -4,76 +4,13 @@ pragma solidity ^0.8.0;
 import "forge-std/Script.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
-contract SimulateHook {
-    uint256 public removeIndex;
-    mapping(uint256 removeIndex => mapping(bytes32 poolId => uint256[] tokenIds))
-        public reomvedTokenIds;
-    uint256[] public tokenIds;
-
-    event TickEvent(bytes32 poolId, int24 currentTick);
-
-    event RegisterShieldEvent(
-        bytes32 poolId,
-        int24 feeMaxLow,
-        int24 feeMaxUpper,
-        uint256 tokenId,
-        address owner
-    );
-
-    function registerShield(
-        bytes32 poolId,
-        int24 feeMaxLow,
-        int24 feeMaxUpper,
-        uint256 tokenId,
-        address owner
-    ) external {
-        emit RegisterShieldEvent(
-            poolId,
-            feeMaxLow,
-            feeMaxUpper,
-            tokenId,
-            owner
-        );
-    }
-
-    function sendTickEvent(bytes32 poolId, int24 currentTick) external {
-        emit TickEvent(poolId, currentTick);
-    }
-
-    function removeLiquidityInBatch(
-        bytes32 poolId,
-        uint256[] memory _tokenIds
-    ) external {
-        for (uint256 i = 0; i < _tokenIds.length; i++) {
-            tokenIds.push(_tokenIds[i]);
-            reomvedTokenIds[removeIndex][poolId].push(_tokenIds[i]);
-        }
-        removeIndex++;
-    }
-
-    function getRemoveIndex() external view returns (uint256) {
-        return removeIndex;
-    }
-
-    function getRemovedTokenIds(
-        uint256 index,
-        bytes32 poolId
-    ) external view returns (uint256[] memory) {
-        return reomvedTokenIds[index][poolId];
-    }
-
-    function getTokenIds() external view returns (uint256[] memory) {
-        return tokenIds;
-    }
-}
-
 contract DeploySimulateHook is Script {
     function run() public {
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        vm.startBroadcast(deployerPrivateKey);
-        SimulateHook hook = new SimulateHook();
-        console.log("SimulateHook deployed to:", address(hook));
-        vm.stopBroadcast();
+        // uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        // vm.startBroadcast(deployerPrivateKey);
+        // SimulateHook hook = new SimulateHook();
+        // console.log("SimulateHook deployed to:", address(hook));
+        // vm.stopBroadcast();
     }
 }
 
