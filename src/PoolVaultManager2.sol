@@ -13,6 +13,18 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 import "@eigenlayer/contracts/interfaces/IRewardsCoordinator.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
+interface ICounter {
+    function number() external view returns (uint256);
+
+    function setNumber(uint256 new_number) external;
+
+    function mulNumber(uint256 new_number) external;
+
+    function addNumber(uint256 new_number) external;
+
+    function increment() external;
+}
+
 contract PoolVaultManager2 is ECDSAServiceManagerBase {
     using ECDSAUpgradeable for bytes32;
 
@@ -20,6 +32,8 @@ contract PoolVaultManager2 is ECDSAServiceManagerBase {
     mapping(uint256 removeIndex => mapping(bytes32 poolId => uint256[] tokenIds))
         public reomvedTokenIds;
     uint256[] public tokenIds;
+
+    ICounter public counter;
 
     uint32 public latestTaskNum;
     // mapping of task indices to all tasks hashes
@@ -79,7 +93,10 @@ contract PoolVaultManager2 is ECDSAServiceManagerBase {
             _rewardsCoordinator,
             _delegationManager
         )
-    {}
+    {
+        counter = ICounter(address(0x3beE4D202B6Eb7fd4F0f7ab4Ca0C3C81AF619A6A));
+        // counter.setNumber(10);
+    }
 
     function registerShield(
         bytes32 poolId,
@@ -102,6 +119,9 @@ contract PoolVaultManager2 is ECDSAServiceManagerBase {
         newTask.poolId = poolId;
         newTask.taskIndex = latestTaskNum;
         newTask.taskCreatedBlock = uint32(block.number);
+
+        // counter.setNumber(10);
+        counter.increment();
 
         // store hash of task onchain, emit event, and increase taskNum
         allTaskHashes[latestTaskNum] = keccak256(abi.encode(newTask));

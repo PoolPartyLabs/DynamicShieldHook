@@ -4,13 +4,34 @@ pragma solidity ^0.8.0;
 import "forge-std/Script.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
+interface ICounter {
+    function number() external view returns (uint256);
+
+    function setNumber(uint256 new_number) external;
+
+
+    function set_number(uint256 new_number) external;
+
+    function mulNumber(uint256 new_number) external;
+
+    function addNumber(uint256 new_number) external;
+
+    function increment() external;
+
+     function sendTickEvent(bytes32 poolId, int24 currentTick) external;
+}
+
 contract DeploySimulateHook is Script {
     function run() public {
-        // uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        // vm.startBroadcast(deployerPrivateKey);
+        uint256 deployerPrivateKey = vm.envUint("STYLUS_ADDRESS");
+        vm.startBroadcast(deployerPrivateKey);
         // SimulateHook hook = new SimulateHook();
         // console.log("SimulateHook deployed to:", address(hook));
         // vm.stopBroadcast();
+        // forge script script/DeploySimulateHook.s.sol --rpc-url http://localhost:8547
+
+        // ICounter(address(0x11B57FE348584f042E436c6Bf7c3c3deF171de49)).sendTickEvent(bytes32(""), 10);
+        ICounter(address(0x11B57FE348584f042E436c6Bf7c3c3deF171de49)).number();
     }
 }
 
