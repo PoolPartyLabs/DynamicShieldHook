@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 /** OpenZeppelin Contracts */
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -31,14 +31,12 @@ import {CalldataDecoder} from "v4-periphery/src/libraries/CalldataDecoder.sol";
 /** Internal */
 import {Planner, Plan} from "./library/external/Planner.sol";
 import {LiquidityAmounts} from "./library/external/LiquidityAmounts.sol";
-
 import {V4Router, IV4Router} from "./external/V4Router.sol";
-
-import {console} from "forge-std/Test.sol";
+import {IPoolVaultManager} from "./interfaces/IPoolVaultManager.sol";
 
 bytes constant ZERO_BYTES = new bytes(0);
 
-contract PoolVaultManager is V4Router, Ownable {
+contract PoolVaultManager is IPoolVaultManager, V4Router, Ownable {
     using PoolIdLibrary for PoolKey;
     using Planner for Plan;
     using StateLibrary for IPoolManager;
@@ -47,33 +45,11 @@ contract PoolVaultManager is V4Router, Ownable {
     using SafeTransferLib for *;
     using CalldataDecoder for bytes;
 
-    struct Position {
-        PoolKey key;
-        address owner;
-        uint256 tokenId;
-    }
-
-    struct PositionTotalSupply {
-        PoolKey key;
-        uint256 tokenId;
-        uint256 amount0;
-        uint256 amount1;
-    }
-
-    struct CallData {
-        PoolKey key;
-        address owner;
-    }
-
     IPositionManager private s_lpm;
     IAllowanceTransfer private s_permit2;
     Currency private s_safeToken;
     mapping(uint256 tokenId => Position) private s_postions;
     mapping(PoolId => PoolKey) private s_poolKeys;
-
-    error InvalidPositionManager();
-    error InvalidHook();
-    error InvalidSelf();
 
     constructor(
         IPoolManager _pm,
@@ -354,7 +330,7 @@ contract PoolVaultManager is V4Router, Ownable {
 
     function _swapToSafeToken(
         Currency _currencyIn,
-        uint256 _tokenId,
+        uint256,
         uint256 _amountIn,
         address _recipient
     ) private {

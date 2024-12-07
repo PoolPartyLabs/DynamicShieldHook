@@ -83,10 +83,8 @@ npm run build
 npm run deploy:core
 
 # Deploy the Pool Vault Manager AVS contracts
-npm run deploy:pool-vault-mg
+npm run deploy:avs
 
 # (Optional) Update ABIs
 npm run extract:abis
-
-# Start the Operator application
-npm run start:operator
+ 

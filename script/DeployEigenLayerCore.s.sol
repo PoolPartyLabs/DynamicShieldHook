@@ -3,8 +3,8 @@ pragma solidity ^0.8.12;
 
 import {Script} from "forge-std/Script.sol";
 
-import {CoreDeploymentLib} from "./utils/CoreDeploymentLib.sol";
-import {UpgradeableProxyLib} from "./utils/UpgradeableProxyLib.sol";
+import {CoreDeploymentLib} from "../src/eigenlayer/library/CoreDeploymentLib.sol";
+import {UpgradeableProxyLib} from "../src/library/UpgradeableProxyLib.sol";
 
 contract DeployEigenLayerCore is Script {
     using CoreDeploymentLib for *;

@@ -2,9 +2,9 @@
 pragma solidity ^0.8.0;
 
 import {Script} from "forge-std/Script.sol";
-import {PoolVaultManagerDeploymentLib} from "./utils/PoolVaultManagerDeploymentLib.sol";
-import {CoreDeploymentLib} from "./utils/CoreDeploymentLib.sol";
-import {SetupPaymentsLib} from "./utils/SetupPaymentsLib.sol";
+import {DynamicShieldAVSDeploymentLib} from "../src/eigenlayer/library/DynamicShieldAVSDeploymentLib.sol";
+import {CoreDeploymentLib} from "../src/eigenlayer/library/CoreDeploymentLib.sol";
+import {SetupPaymentsLib} from "../src/eigenlayer/library/SetupPaymentsLib.sol";
 import {IRewardsCoordinator} from "@eigenlayer/contracts/interfaces/IRewardsCoordinator.sol";
 
 contract SetupPayments is Script {
@@ -22,7 +22,7 @@ contract SetupPayments is Script {
 
     address private deployer;
     CoreDeploymentLib.DeploymentData coreDeployment;
-    PoolVaultManagerDeploymentLib.DeploymentData poolVaultManagerDeployment;
+    DynamicShieldAVSDeploymentLib.DeploymentData dynamicShieldAVSDeployment;
     string internal constant filePath = "test/mockData/scratch/payments.json";
 
     uint256 constant NUM_TOKEN_EARNINGS = 1;
@@ -33,7 +33,7 @@ contract SetupPayments is Script {
         vm.label(deployer, "Deployer");
 
         coreDeployment = CoreDeploymentLib.readDeploymentJson("deployments/core/", block.chainid);
-        poolVaultManagerDeployment = PoolVaultManagerDeploymentLib.readDeploymentJson("deployments/pool-vault-manager/", block.chainid);
+        dynamicShieldAVSDeployment = DynamicShieldAVSDeploymentLib.readDeploymentJson("deployments/dynamic-shield-avs/", block.chainid);
 
         // TODO: Get the filePath from config
     }
@@ -60,7 +60,7 @@ contract SetupPayments is Script {
     function createAVSRewardsSubmissions(uint256 numPayments, uint256 amountPerPayment, uint32 duration, uint32 startTimestamp) public {
         SetupPaymentsLib.createAVSRewardsSubmissions(
             IRewardsCoordinator(coreDeployment.rewardsCoordinator),
-            poolVaultManagerDeployment.strategy,
+            dynamicShieldAVSDeployment.strategy,
             numPayments,
             amountPerPayment,
             duration,
@@ -76,7 +76,7 @@ contract SetupPayments is Script {
             recipient,
             earnerLeaf,
             NUM_TOKEN_EARNINGS,
-            poolVaultManagerDeployment.strategy
+            dynamicShieldAVSDeployment.strategy
         );
     }
 
@@ -85,7 +85,7 @@ contract SetupPayments is Script {
             IRewardsCoordinator(coreDeployment.rewardsCoordinator), 
             NUM_TOKEN_EARNINGS, 
             amountPerPayment, 
-            poolVaultManagerDeployment.strategy
+            dynamicShieldAVSDeployment.strategy
         );
         IRewardsCoordinator.EarnerTreeMerkleLeaf[] memory earnerLeaves = SetupPaymentsLib.createEarnerLeaves(earners, tokenLeaves);
 
@@ -93,7 +93,7 @@ contract SetupPayments is Script {
             IRewardsCoordinator(coreDeployment.rewardsCoordinator),
             tokenLeaves,
             earnerLeaves,
-            poolVaultManagerDeployment.strategy,
+            dynamicShieldAVSDeployment.strategy,
             endTimestamp,
             numPayments, 
             NUM_TOKEN_EARNINGS,

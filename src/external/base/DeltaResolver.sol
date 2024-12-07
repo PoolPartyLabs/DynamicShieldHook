@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
@@ -24,7 +24,11 @@ abstract contract DeltaResolver is ImmutableState {
     /// @param recipient Address to receive the currency
     /// @param amount Amount to take
     /// @dev Returns early if the amount is 0
-    function _take(Currency currency, address recipient, uint256 amount) internal {
+    function _take(
+        Currency currency,
+        address recipient,
+        uint256 amount
+    ) internal {
         if (amount == 0) return;
         poolManager.take(currency, recipient, amount);
     }
@@ -35,7 +39,11 @@ abstract contract DeltaResolver is ImmutableState {
     /// @param payer Address of the payer
     /// @param amount Amount to send
     /// @dev Returns early if the amount is 0
-    function _settle(Currency currency, address payer, uint256 amount) internal {
+    function _settle(
+        Currency currency,
+        address payer,
+        uint256 amount
+    ) internal {
         if (amount == 0) return;
 
         poolManager.sync(currency);
@@ -52,12 +60,18 @@ abstract contract DeltaResolver is ImmutableState {
     /// @param token The token to settle. This is known not to be the native currency
     /// @param payer The address who should pay tokens
     /// @param amount The number of tokens to send
-    function _pay(Currency token, address payer, uint256 amount) internal virtual;
+    function _pay(
+        Currency token,
+        address payer,
+        uint256 amount
+    ) internal virtual;
 
     /// @notice Obtain the full amount owed by this contract (negative delta)
     /// @param currency Currency to get the delta for
     /// @return amount The amount owed by this contract as a uint256
-    function _getFullDebt(Currency currency) internal view returns (uint256 amount) {
+    function _getFullDebt(
+        Currency currency
+    ) internal view returns (uint256 amount) {
         int256 _amount = poolManager.currencyDelta(address(this), currency);
         // If the amount is positive, it should be taken not settled.
         if (_amount > 0) revert DeltaNotNegative(currency);
@@ -68,7 +82,9 @@ abstract contract DeltaResolver is ImmutableState {
     /// @notice Obtain the full credit owed to this contract (positive delta)
     /// @param currency Currency to get the delta for
     /// @return amount The amount owed to this contract as a uint256
-    function _getFullCredit(Currency currency) internal view returns (uint256 amount) {
+    function _getFullCredit(
+        Currency currency
+    ) internal view returns (uint256 amount) {
         int256 _amount = poolManager.currencyDelta(address(this), currency);
         // If the amount is negative, it should be settled not taken.
         if (_amount < 0) revert DeltaNotPositive(currency);
@@ -76,7 +92,10 @@ abstract contract DeltaResolver is ImmutableState {
     }
 
     /// @notice Calculates the amount for a settle action
-    function _mapSettleAmount(uint256 amount, Currency currency) internal view returns (uint256) {
+    function _mapSettleAmount(
+        uint256 amount,
+        Currency currency
+    ) internal view returns (uint256) {
         if (amount == ActionConstants.CONTRACT_BALANCE) {
             return currency.balanceOfSelf();
         } else if (amount == ActionConstants.OPEN_DELTA) {
@@ -87,7 +106,10 @@ abstract contract DeltaResolver is ImmutableState {
     }
 
     /// @notice Calculates the amount for a take action
-    function _mapTakeAmount(uint256 amount, Currency currency) internal view returns (uint256) {
+    function _mapTakeAmount(
+        uint256 amount,
+        Currency currency
+    ) internal view returns (uint256) {
         if (amount == ActionConstants.OPEN_DELTA) {
             return _getFullCredit(currency);
         } else {
@@ -99,11 +121,11 @@ abstract contract DeltaResolver is ImmutableState {
     /// @param inputCurrency The currency, either native or wrapped native, that this contract holds
     /// @param amount The amount to wrap or unwrap. Can be CONTRACT_BALANCE, OPEN_DELTA or a specific amount
     /// @param outputCurrency The currency after the wrap/unwrap that the user may owe a balance in on the poolManager
-    function _mapWrapUnwrapAmount(Currency inputCurrency, uint256 amount, Currency outputCurrency)
-        internal
-        view
-        returns (uint256)
-    {
+    function _mapWrapUnwrapAmount(
+        Currency inputCurrency,
+        uint256 amount,
+        Currency outputCurrency
+    ) internal view returns (uint256) {
         // if wrapping, the balance in this contract is in ETH
         // if unwrapping, the balance in this contract is in WETH
         uint256 balance = inputCurrency.balanceOf(address(this));
