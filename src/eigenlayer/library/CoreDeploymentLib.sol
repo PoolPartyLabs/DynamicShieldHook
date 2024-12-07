@@ -171,16 +171,16 @@ library CoreDeploymentLib {
                 GENESIS_TIME
             )
         );
-        address eigenPodBeaconImpl = address(new UpgradeableBeacon(eigenPodImpl, proxyAdmin));
+        // address eigenPodBeaconImpl = address(new UpgradeableBeacon(eigenPodImpl, proxyAdmin));
         address baseStrategyImpl =
             address(new StrategyBase(IStrategyManager(result.strategyManager)));
         /// TODO: PauserRegistry isn't upgradeable
-        address pauserRegistryImpl = address(
-            new PauserRegistry(
-                new address[](0), // Empty array for pausers
-                proxyAdmin // ProxyAdmin as the unpauser
-            )
-        );
+        // address pauserRegistryImpl = address(
+        //     new PauserRegistry(
+        //         new address[](0), // Empty array for pausers
+        //         proxyAdmin // ProxyAdmin as the unpauser
+        //     )
+        // );
 
         // Deploy and configure the strategy beacon
         result.strategyBeacon = address(new UpgradeableBeacon(baseStrategyImpl, proxyAdmin));

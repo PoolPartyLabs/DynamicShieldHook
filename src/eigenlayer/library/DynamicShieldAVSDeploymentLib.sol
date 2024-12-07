@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+
 import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {stdJson} from "forge-std/StdJson.sol";
+
 import {ECDSAStakeRegistry} from "@eigenlayer-middleware/src/unaudited/ECDSAStakeRegistry.sol";
-import {DynamicShieldAVS} from "../DynamicShieldAVS.sol";
 import {IDelegationManager} from "@eigenlayer/contracts/interfaces/IDelegationManager.sol";
 import {Quorum} from "@eigenlayer-middleware/src/interfaces/IECDSAStakeRegistryEventsAndErrors.sol";
+
 import {UpgradeableProxyLib} from "../../library/UpgradeableProxyLib.sol";
-import {CoreDeploymentLib} from "./CoreDeploymentLib.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {IPoolPartyDynamicShieldHook} from "../../interfaces/IPoolPartyDynamicShieldHook.sol";
+import {CoreDeploymentLib} from "./CoreDeploymentLib.sol";
+import {DynamicShieldAVS} from "../DynamicShieldAVS.sol";
 
 library DynamicShieldAVSDeploymentLib {
     using stdJson for *;
@@ -26,6 +29,7 @@ library DynamicShieldAVSDeploymentLib {
 
     struct DeploymentData {
         address dynamicShieldAVS;
+        address dynamicShieldHook;
         address stakeRegistry;
         address strategy;
         address token;
@@ -33,10 +37,13 @@ library DynamicShieldAVSDeploymentLib {
 
     function deployContracts(
         address proxyAdmin,
+        IPoolPartyDynamicShieldHook hook,
         CoreDeploymentLib.DeploymentData memory core,
         Quorum memory quorum
     ) internal returns (DeploymentData memory) {
         DeploymentData memory result;
+
+        result.dynamicShieldHook = address(hook);
 
         // First, deploy upgradeable proxy contracts that will point to the implementations.
         result.dynamicShieldAVS = UpgradeableProxyLib.setUpEmptyProxy(
@@ -49,7 +56,7 @@ library DynamicShieldAVSDeploymentLib {
         );
         address dynamicShieldAVSImpl = address(
             new DynamicShieldAVS(
-                IPoolPartyDynamicShieldHook(address(0)),
+                hook,
                 core.avsDirectory,
                 result.stakeRegistry,
                 core.rewardsCoordinator,
@@ -96,10 +103,13 @@ library DynamicShieldAVSDeploymentLib {
 
         DeploymentData memory data;
         /// TODO: 2 Step for reading deployment json.  Read to the core and the AVS data
-        data.dynamicShieldAVS = json.readAddress(".contracts.dynamicShieldAVS");
-        data.stakeRegistry = json.readAddress(".contracts.stakeRegistry");
-        data.strategy = json.readAddress(".contracts.strategy");
-        data.token = json.readAddress(".contracts.token");
+        data.dynamicShieldAVS = json.readAddress(".addresses.dynamicShieldAVS");
+        data.stakeRegistry = json.readAddress(".addresses.stakeRegistry");
+        data.strategy = json.readAddress(".addresses.strategy");
+        data.token = json.readAddress(".addresses.token");
+        data.dynamicShieldHook = json.readAddress(
+            ".addresses.dynamicShieldHook"
+        );
 
         return data;
     }
@@ -175,7 +185,9 @@ library DynamicShieldAVSDeploymentLib {
                 '","strategy":"',
                 data.strategy.toHexString(),
                 '","token":"',
-                data.token.toHexString(),
+                data.strategy.toHexString(),
+                '","dynamicShieldHook":"',
+                data.dynamicShieldHook.toHexString(),
                 '"}'
             );
     }

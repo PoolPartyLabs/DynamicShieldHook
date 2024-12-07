@@ -147,7 +147,7 @@
       {
         "name": "poolId",
         "type": "bytes32",
-        "internalType": "PoolId"
+        "internalType": "bytes32"
       },
       {
         "name": "tickLower",
@@ -175,7 +175,7 @@
       {
         "name": "poolId",
         "type": "bytes32",
-        "internalType": "PoolId"
+        "internalType": "bytes32"
       },
       {
         "name": "currentTick",
@@ -258,7 +258,7 @@
           {
             "name": "poolId",
             "type": "bytes32",
-            "internalType": "PoolId"
+            "internalType": "bytes32"
           },
           {
             "name": "taskCreatedBlock",
@@ -447,7 +447,7 @@
         "name": "poolId",
         "type": "bytes32",
         "indexed": false,
-        "internalType": "PoolId"
+        "internalType": "bytes32"
       },
       {
         "name": "tickLower",
@@ -513,7 +513,7 @@
           {
             "name": "poolId",
             "type": "bytes32",
-            "internalType": "PoolId"
+            "internalType": "bytes32"
           },
           {
             "name": "taskCreatedBlock",
@@ -539,7 +539,7 @@
         "name": "poolId",
         "type": "bytes32",
         "indexed": true,
-        "internalType": "PoolId"
+        "internalType": "bytes32"
       },
       {
         "name": "currentTick",
@@ -567,7 +567,7 @@
           {
             "name": "poolId",
             "type": "bytes32",
-            "internalType": "PoolId"
+            "internalType": "bytes32"
           },
           {
             "name": "taskCreatedBlock",

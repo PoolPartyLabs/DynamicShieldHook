@@ -32,7 +32,6 @@ import {SortTokens} from "v4-core/test/utils/SortTokens.sol";
 import {PositionDescriptor} from "v4-periphery/src/PositionDescriptor.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {WETH} from "solmate/src/tokens/WETH.sol";
-import {DynamicShieldHookDeploymentLib} from "../src/library/DynamicShieldHookDeploymentLib.sol";
 import "forge-std/console.sol";
 
 contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
@@ -69,8 +68,6 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
 
     PoolKey key;
     PoolPartyDynamicShieldHook shieldHook;
-
-    DynamicShieldHookDeploymentLib.DeploymentData dynamicShieldHookDeployment;
 
     uint256 privateKey;
     address signerAddr;
@@ -122,12 +119,70 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
         approvePosmCurrency(stableCurrency);
 
         seedBalance(signerAddr);
+        vm.stopBroadcast();
+    }
+
+    function run() public virtual {
+        vm.startBroadcast(signerAddr);
+
+        // //Initialize Pool for stableCurrency
+        // (, PoolKey memory token1USDCKey) = _initPoolsForStableCurrency();
+
+        // uint256 amountAfterTransfer = 990e18;
+        // uint256 amountToSend = 1000e18;
+
+        // (uint256 amount0, uint256 amount1) = token1USDCKey.currency0 ==
+        //     currency0
+        //     ? (amountToSend, amountAfterTransfer)
+        //     : (amountAfterTransfer, amountToSend);
+
+        // int24 tickLower = -120;
+        // int24 tickUpper = 120;
+
+        // Plan memory planner = Planner.init();
+        // planner.add(
+        //     Actions.SETTLE,
+        //     abi.encode(token1USDCKey.currency0, amount0, true)
+        // );
+        // planner.add(
+        //     Actions.SETTLE,
+        //     abi.encode(token1USDCKey.currency1, amount1, true)
+        // );
+        // planner.add(
+        //     Actions.MINT_POSITION_FROM_DELTAS,
+        //     abi.encode(
+        //         token1USDCKey,
+        //         tickLower,
+        //         tickUpper,
+        //         // expectedLiquidity,
+        //         MAX_SLIPPAGE_INCREASE,
+        //         MAX_SLIPPAGE_INCREASE,
+        //         signerAddr,
+        //         Constants.ZERO_BYTES
+        //     )
+        // );
+        // // planner.finalizeModifyLiquidityWithSettlePair(token1USDCKey);
+        // planner.finalizeModifyLiquidityWithClose(token1USDCKey);
+
+        // bytes memory plan = planner.encode();
+        // lpm.modifyLiquidities(plan, _deadline);
+
+        uint160 flags = uint160(
+            Hooks.BEFORE_INITIALIZE_FLAG |
+                Hooks.BEFORE_SWAP_FLAG |
+                Hooks.AFTER_SWAP_FLAG
+        );
 
         uint24 _feeInit = 500; // 0.05%
         uint24 _feeMax = 10000; // 1%
 
-        dynamicShieldHookDeployment = DynamicShieldHookDeploymentLib
-            .deployContracts(
+        // Find an address + salt using HookMiner that meets our flags criteria
+        address CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+        (address hookAddress, bytes32 salt) = HookMiner.find(
+            CREATE2_DEPLOYER,
+            flags,
+            type(PoolPartyDynamicShieldHook).creationCode,
+            abi.encode(
                 poolManager,
                 lpm,
                 permit2,
@@ -136,74 +191,41 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
                 _feeInit,
                 _feeMax,
                 signerAddr
-            );
-
-        vm.stopBroadcast();
-
-        DynamicShieldHookDeploymentLib.writeDeploymentJson(
-            dynamicShieldHookDeployment
+            )
         );
-    }
 
-    function run() public virtual {
-        vm.startBroadcast(signerAddr);
+        //Deploy hook
+        shieldHook = new PoolPartyDynamicShieldHook{salt: salt}(
+            poolManager,
+            lpm,
+            permit2,
+            feeManager,
+            stableCurrency,
+            _feeInit,
+            _feeMax,
+            signerAddr
+        );
+        shieldHook.setAVS(address(dynamicShieldAVS));
 
-        // uint160 flags = uint160(
-        //     Hooks.BEFORE_INITIALIZE_FLAG |
-        //         Hooks.BEFORE_SWAP_FLAG |
-        //         Hooks.AFTER_SWAP_FLAG
-        // );
+        console.log("hookAddress:", address(shieldHook));
+        console.log("create2Address:", hookAddress);
 
-        // // Find an address + salt using HookMiner that meets our flags criteria
-        // address CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
-        // (address hookAddress, bytes32 salt) = HookMiner.find(
-        //     CREATE2_DEPLOYER,
-        //     flags,
-        //     type(PoolPartyDynamicShieldHook).creationCode,
-        //     abi.encode(
-        //         poolManager,
-        //         lpm,
-        //         permit2,
-        //         feeManager,
-        //         stableCurrency,
-        //         _feeInit,
-        //         _feeMax,
-        //         signerAddr
-        //     )
-        // );
+        // Ensure it got deployed to our pre-computed address
+        require(address(shieldHook) == hookAddress, "hook address mismatch");
 
-        // //Deploy hook
-        // shieldHook = new PoolPartyDynamicShieldHook{salt: salt}(
-        //     poolManager,
-        //     lpm,
-        //     permit2,
-        //     feeManager,
-        //     stableCurrency,
-        //     _feeInit,
-        //     _feeMax,
-        //     signerAddr
-        // );
-        // shieldHook.setAVS(address(dynamicShieldAVS));
-
-        // console.log("hookAddress:", address(shieldHook));
-        // console.log("create2Address:", hookAddress);
-
-        // // Ensure it got deployed to our pre-computed address
-        // require(address(shieldHook) == hookAddress, "hook address mismatch");
-
-        // console.log(
-        //     "Deployed PoolPartyDynamicShieldHook at",
-        //     address(shieldHook)
-        // );
+        console.log(
+            "Deployed PoolPartyDynamicShieldHook at",
+            address(shieldHook)
+        );
 
         // //Initialize a pool with these two tokens
-        // (key, tokenId) = _mintPositionAndIncreaseDecreaseLiquidity(
-        //     signerAddr,
-        //     shieldHook
-        // );
-        // console.log("tokenId:", tokenId);
-        // uint128 initialLiquidity = lpm.getPositionLiquidity(tokenId);
-        // console.log("Initial liquidity:", initialLiquidity);
+        (key, tokenId) = _mintPositionAndIncreaseDecreaseLiquidity(
+            signerAddr,
+            shieldHook
+        );
+        console.log("tokenId:", tokenId);
+        uint128 initialLiquidity = lpm.getPositionLiquidity(tokenId);
+        console.log("Initial liquidity:", initialLiquidity);
         vm.stopBroadcast();
     }
 
