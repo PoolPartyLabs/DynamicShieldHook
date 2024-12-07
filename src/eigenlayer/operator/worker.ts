@@ -51,6 +51,7 @@ async function startWorker() {
         ]
       );
 
+      console.log(`Responding to task.`);
       const tx = await dynamicShieldAVS.respondToTask(
         { taskIndex, poolId, taskCreatedBlock: task.taskCreatedBlock },
         taskIndex,

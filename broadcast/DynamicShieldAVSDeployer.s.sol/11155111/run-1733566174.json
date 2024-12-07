@@ -197,7 +197,7 @@
       "transactionType": "CALL",
       "contractName": null,
       "contractAddress": "0xe03b70d7881f8767ca65b5c025473f001f3360c0",
-      "function": "setAVS(address)",
+      "function": "registerAVS(address)",
       "arguments": [
         "0x7E6D8aEc0d31298f2b6e9D0755F01d66621eC71C"
       ],

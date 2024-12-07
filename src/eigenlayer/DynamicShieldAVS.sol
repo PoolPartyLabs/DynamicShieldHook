@@ -62,7 +62,9 @@ contract DynamicShieldAVS is IDynamicShieldAVS, ECDSAServiceManagerBase {
             _rewardsCoordinator,
             _delegationManager
         )
-    {}
+    {
+        s_poolPartyDynamicShieldHook = _poolPartyDynamicShieldHook;
+    }
 
     function notifyRegisterShield(
         bytes32 poolId,
@@ -91,8 +93,8 @@ contract DynamicShieldAVS is IDynamicShieldAVS, ECDSAServiceManagerBase {
     function respondToTask(
         Task calldata task,
         uint32 referenceTaskIndex,
-        uint256[] memory _tokenIds,
-        bytes memory signature
+        uint256[] calldata _tokenIds,
+        bytes calldata signature
     ) external onlyOperator {
         // check that the task is valid, hasn't been responsed yet, and is being responded in time
         require(
@@ -105,7 +107,6 @@ contract DynamicShieldAVS is IDynamicShieldAVS, ECDSAServiceManagerBase {
         );
 
         // @todo review why is not working on nitro test node
-
         // The message that was signed
         bytes32 messageHash = keccak256(abi.encodePacked(task.poolId));
         bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();

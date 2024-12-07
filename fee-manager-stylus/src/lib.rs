@@ -89,7 +89,8 @@ impl IFeeManager for FeeManager {
             );
             current_liq_mut += current_liq;
             let fee_per_tick = U256::from(fees_per_ticks[tick_index]);
-            let fee_calc = ((fee_per_tick * current_liq) + fee_max_times_liq_per_tick).div_ceil(U256::from(10_000));
+            let fee_calc = ((fee_per_tick * current_liq) + fee_max_times_liq_per_tick)
+                .div_ceil(U256::from(10_000));
 
             let mut tick_infos_setter = self.tick_infos.setter(pool_id);
             let mut tick_info_setter = tick_infos_setter.setter(tick_signed_32);

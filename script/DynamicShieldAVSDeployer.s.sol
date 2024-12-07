@@ -57,7 +57,10 @@ contract DynamicShieldAVSDeployer is Script {
         );
 
         dynamicShieldHookDeployment = DynamicShieldHookDeploymentLib
-            .readDeploymentJson("deployments/dynamic-shield-hook/", block.chainid);
+            .readDeploymentJson(
+                "deployments/dynamic-shield-hook/",
+                block.chainid
+            );
     }
 
     function run() external {
@@ -75,7 +78,7 @@ contract DynamicShieldAVSDeployer is Script {
             );
 
         IPoolPartyDynamicShieldHook(dynamicShieldHookDeployment.dynamicShield)
-            .setAVS(dynamicShieldAVSDeployment.dynamicShieldAVS);
+            .registerAVS(dynamicShieldAVSDeployment.dynamicShieldAVS);
 
         dynamicShieldAVSDeployment.strategy = address(dynamicShieldAVSStrategy);
         dynamicShieldAVSDeployment.token = address(token);

@@ -5,6 +5,7 @@ import path from "path";
 dotenv.config();
 import { dirname } from "path";
 import { fileURLToPath } from "url";
+import { CHAIN_ID, PRIVATE_KEY, RPC_PROVIDER } from "./constants";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -15,16 +16,14 @@ if (!Object.keys(process.env).length) {
 }
 
 // Setup env variables
-export const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-export const wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
-/// TODO: Hack
-let chainId = 31337;
+export const provider = new ethers.JsonRpcProvider(RPC_PROVIDER);
+export const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 const avsDeploymentData = JSON.parse(
   fs.readFileSync(
     path.resolve(
       __dirname,
-      `../deployments/dynamic-shield-avs/${chainId}.json`
+      `../../../deployments/dynamic-shield-avs/${CHAIN_ID}.json`
     ),
     "utf8"
   )
@@ -32,14 +31,15 @@ const avsDeploymentData = JSON.parse(
 // Load core deployment data
 const coreDeploymentData = JSON.parse(
   fs.readFileSync(
-    path.resolve(__dirname, `../deployments/core/${chainId}.json`),
+    path.resolve(__dirname, `../../../deployments/core/${CHAIN_ID}.json`),
     "utf8"
   )
 );
 
 const delegationManagerAddress = coreDeploymentData.addresses.delegation; // todo: reminder to fix the naming of this contract in the deployment file, change to delegationManager
 const avsDirectoryAddress = coreDeploymentData.addresses.avsDirectory;
-const dynamicShieldAVSAddress = avsDeploymentData.addresses.dynamicShieldAVS;
+export const dynamicShieldAVSAddress =
+  avsDeploymentData.addresses.dynamicShieldAVS;
 const ecdsaStakeRegistryAddress = avsDeploymentData.addresses.stakeRegistry;
 
 // Load ABIs
@@ -103,7 +103,7 @@ export const registerOperator = async () => {
     console.log("Operator registered to Core EigenLayer contracts");
   } catch (error) {
     alreadyRegistered = true;
-    console.error("Error in registering as operator:", error);
+    // console.error("Error in registering as operator:", error);
   }
 
   if (alreadyRegistered) {
@@ -132,7 +132,7 @@ export const registerOperator = async () => {
 
   // Sign the digest hash with the operator's private key
   console.log("Signing digest hash with operator's private key");
-  const operatorSigningKey = new ethers.SigningKey(process.env.PRIVATE_KEY!);
+  const operatorSigningKey = new ethers.SigningKey(PRIVATE_KEY);
   const operatorSignedDigestHash = operatorSigningKey.sign(operatorDigestHash);
 
   // Encode the signature in the required format

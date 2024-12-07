@@ -2,7 +2,8 @@ import { createPublicClient, http, parseAbiItem } from "viem";
 import { mainnet, foundry } from "viem/chains";
 import boss, { queueName } from "./queue";
 import { createTable, _knex } from "./repository";
-import { CONTRACT, RPC_PROVIDER } from "./constants";
+import { RPC_PROVIDER } from "./constants";
+import { dynamicShieldAVSAddress } from "./eigenlayer";
 
 const publicClient = createPublicClient({
   chain: foundry,
@@ -17,7 +18,7 @@ async function start() {
   await createTable();
   // TODO: handle the unwatch in the future
   const unwatch = publicClient.watchEvent({
-    address: CONTRACT,
+    address: dynamicShieldAVSAddress,
     poll: true,
     pollingInterval: 5_000, // 5 seconds
     fromBlock: lastBlock,
@@ -27,7 +28,7 @@ async function start() {
         "struct Task { uint32 taskIndex;  bytes32 poolId;  uint32 taskCreatedBlock; }",
       ]),
       parseAbiItem(
-        "event RegisterShieldEvent(bytes32 poolId, int24 tickLower, int24 tickUpper, uint256 tokenId, address owner)"
+        "event RegisterShieldEvent(bytes32 poolId, int24 tickLower, int24 tickUpper, uint256 tokenId)"
       ),
     ],
     onLogs: async (logs) => {
@@ -56,10 +57,9 @@ async function start() {
         const poolId = args.poolId;
         const tickLower = args.tickLower;
         const tickUpper = args.tickUpper;
-        const tokenId = args.tokenId;
-        const owner = args.owner;
+        const tokenId = args.tokenId; 
         console.log(
-          `poolId: ${poolId}, tickLower: ${tickLower}, tickUpper: ${tickUpper}, tokenId: ${tokenId}, owner: ${owner}`
+          `poolId: ${poolId}, tickLower: ${tickLower}, tickUpper: ${tickUpper}, tokenId: ${tokenId}`
         );
         try {
           await _knex

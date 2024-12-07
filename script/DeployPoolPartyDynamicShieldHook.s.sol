@@ -183,7 +183,7 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
         //     _feeMax,
         //     signerAddr
         // );
-        // shieldHook.setAVS(address(dynamicShieldAVS));
+        // shieldHook.registerAVS(address(dynamicShieldAVS));
 
         // console.log("hookAddress:", address(shieldHook));
         // console.log("create2Address:", hookAddress);

@@ -42,14 +42,19 @@ library DynamicShieldAVSDeploymentLib {
         Quorum memory quorum
     ) internal returns (DeploymentData memory) {
         DeploymentData memory result;
+        {
+            result.dynamicShieldHook = address(hook);
 
-        result.dynamicShieldHook = address(hook);
+            // console2.log(" DynamicShieldHook ", address(hook));
 
-        // First, deploy upgradeable proxy contracts that will point to the implementations.
-        result.dynamicShieldAVS = UpgradeableProxyLib.setUpEmptyProxy(
-            proxyAdmin
-        );
-        result.stakeRegistry = UpgradeableProxyLib.setUpEmptyProxy(proxyAdmin);
+            // First, deploy upgradeable proxy contracts that will point to the implementations.
+            result.dynamicShieldAVS = UpgradeableProxyLib.setUpEmptyProxy(
+                proxyAdmin
+            );
+            result.stakeRegistry = UpgradeableProxyLib.setUpEmptyProxy(
+                proxyAdmin
+            );
+        }
         // Deploy the implementation contracts, using the proxy contracts as inputs
         address stakeRegistryImpl = address(
             new ECDSAStakeRegistry(IDelegationManager(core.delegationManager))
@@ -63,21 +68,22 @@ library DynamicShieldAVSDeploymentLib {
                 core.delegationManager
             )
         );
-        // Upgrade contracts
-        bytes memory upgradeCall = abi.encodeCall(
-            ECDSAStakeRegistry.initialize,
-            (result.dynamicShieldAVS, 0, quorum)
-        );
-        UpgradeableProxyLib.upgradeAndCall(
-            result.stakeRegistry,
-            stakeRegistryImpl,
-            upgradeCall
-        );
-        UpgradeableProxyLib.upgrade(
-            result.dynamicShieldAVS,
-            dynamicShieldAVSImpl
-        );
-
+        {
+            // Upgrade contracts
+            bytes memory upgradeCall = abi.encodeCall(
+                ECDSAStakeRegistry.initialize,
+                (result.dynamicShieldAVS, 0, quorum)
+            );
+            UpgradeableProxyLib.upgradeAndCall(
+                result.stakeRegistry,
+                stakeRegistryImpl,
+                upgradeCall
+            );
+            UpgradeableProxyLib.upgrade(
+                result.dynamicShieldAVS,
+                dynamicShieldAVSImpl
+            );
+        }
         return result;
     }
 

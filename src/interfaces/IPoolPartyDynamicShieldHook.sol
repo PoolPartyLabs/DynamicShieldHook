@@ -35,7 +35,9 @@ interface IPoolPartyDynamicShieldHook is IHooks {
     error InvalidSelf();
     error InvalidAVS();
 
-    function setAVS(address _avs) external;
+    event AVSRegistered(address indexed avs);
+
+    function registerAVS(address _avs) external;
 
     function initializeShield(
         PoolKey calldata _poolKey,

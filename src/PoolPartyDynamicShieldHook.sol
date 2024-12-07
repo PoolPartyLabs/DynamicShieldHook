@@ -57,6 +57,7 @@ contract PoolPartyDynamicShieldHook is
     mapping(PoolId => ShieldInfo) public s_shieldInfos;
     mapping(PoolId => uint256[]) public s_tokenIds;
     mapping(PoolId => mapping(int24 tick => TickInfo)) public s_tickInfos;
+    mapping(address owner => uint256 tokenId) public s_ownerTokenIds;
 
     modifier onlyAVS() {
         if (msg.sender != address(s_dynamicShieldAVS)) revert InvalidAVS();
@@ -88,8 +89,9 @@ contract PoolPartyDynamicShieldHook is
         s_feeManager = _feeManager;
     }
 
-    function setAVS(address _avs) external onlyOwner {
+    function registerAVS(address _avs) external onlyOwner {
         s_dynamicShieldAVS = IDynamicShieldAVS(_avs);
+        emit AVSRegistered(_avs);
     }
 
     // Required override function for BaseHook to let the PoolManager know which hooks are implemented
