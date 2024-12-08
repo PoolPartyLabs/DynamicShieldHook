@@ -1,90 +1,45 @@
-## PoolPartyDynamicShieldHook
+# DynamicShield Hook  
 
-**The PoolPartyDynamicShieldHook project introduces dynamic, customizable logic to Uniswap liquidity pools by leveraging Uniswap v4's hook system. The goal is to provide advanced control and monitoring during swaps, enabling features like dynamic shielding, access control, or additional security layers for liquidity providers and traders.**
+**DynamicShield Hook** is an innovative solution for liquidity providers (LPs) designed to address key challenges in decentralized finance (DeFi), such as impermanent loss (IL) and asset devaluation. Built for Uniswap V4, it enhances liquidity management by dynamically adjusting fees, safeguarding inactive assets, and enabling LPs to capture market recovery opportunities.  
 
-Foundry consists of:
+---
 
-- **Forge**: Ethereum testing framework
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+## Features  
 
-## Documentation
+- **Dynamic Fees:** Automatically adjust pool fees based on balance conditions to protect LPs and promote trading activity.  
+- **Safety Conversion:** Convert out-of-range assets into stable tokens to mitigate devaluation risks during downturns.  
+- **Impermanent Gain Mechanism:** Reinvest safe tokens into original pool assets during market recoveries, turning potential losses into profits.  
+- **Incentivized Vaults:** Reward LPs for providing liquidity, especially in low-fee conditions, increasing market depth and competitiveness.  
 
-https://book.getfoundry.sh/
+---
 
-## Usage
+## Benefits  
 
-### Libraries
+1. **Minimized Impermanent Loss (IL):** Protects LP capital by dynamically adapting to market conditions.  
+2. **Reduced Asset Devaluation:** Safeguards out-of-range liquidity by converting to safer tokens.  
+3. **Increased Profitability:** Captures recovery opportunities, turning risks into gains.  
+4. **Enhanced Market Stability:** Incentivizes liquidity provision, improving depth and efficiency.  
 
-```shell
-forge install foundry-rs/forge-std
-forge install uniswap/v4-core
-forge install uniswap/v4-periphery
-forge install openzeppelin/openzeppelin-contracts
-forge install transmissions11/solmate
-```
+---
 
-### Build
+## Contributing  
 
-```shell
-$ forge build
-```
+We welcome contributions to enhance the **DynamicShield Hook**. Please open issues for bugs or feature requests and submit pull requests for improvements.  
 
-### Test
+---
 
-```shell
-$ forge test
-```
+## License  
 
-### Format
+This project is licensed under the Business Source License 1.1 (BUSL-1.1). See the [LICENSE](LICENSE) file for details.  
 
-```shell
-$ forge fmt
-```
+---
 
-### Gas Snapshots
+## About  
 
-```shell
-$ forge snapshot
-```
+**DynamicShield Hook** was developed by the team at **Pool Party**, creators of innovative solutions to simplify and optimize liquidity provision in DeFi. Learn more about our work at [pool-party.xyz](https://pool-party.xyz).  
 
-### Anvil
+---
 
-```shell
-$ anvil
-```
+## Contact  
 
-### Deploy
-
-```shell
-$ forge script script/... --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
-
-
-# Updates dependencies if necessary and builds the contracts 
-npm run build
-
-# Deploy the EigenLayer contracts
-npm run deploy:core
-
-# Deploy the Pool Vault Manager AVS contracts
-npm run deploy:avs
-
-# (Optional) Update ABIs
-npm run extract:abis
- 
+For questions or support, reach out to us at [hi@pool-party.xyz](mailto:hi@pool-party.xyz).
