@@ -19,6 +19,7 @@ import {CoreDeploymentLib} from "../src/eigenlayer/library/CoreDeploymentLib.sol
 import {DynamicShieldHookDeploymentLib} from "../src/library/DynamicShieldHookDeploymentLib.sol";
 import {UpgradeableProxyLib} from "../src/library/UpgradeableProxyLib.sol";
 import {IPoolPartyDynamicShieldHook} from "../src/interfaces/IPoolPartyDynamicShieldHook.sol";
+import {DynamicShieldAVS} from "../src/eigenlayer/DynamicShieldAVS.sol";
 
 contract DynamicShieldAVSDeployer is Script {
     using CoreDeploymentLib for *;
@@ -68,17 +69,15 @@ contract DynamicShieldAVSDeployer is Script {
         proxyAdmin = UpgradeableProxyLib.deployProxyAdmin(deployer);
 
         dynamicShieldAVSDeployment = DynamicShieldAVSDeploymentLib
-            .deployContracts(
-                deployer,
-                IPoolPartyDynamicShieldHook(
-                    dynamicShieldHookDeployment.dynamicShield
-                ),
-                coreDeployment,
-                quorum
-            );
+            .deployContracts(deployer, coreDeployment, quorum);
 
         IPoolPartyDynamicShieldHook(dynamicShieldHookDeployment.dynamicShield)
             .registerAVS(dynamicShieldAVSDeployment.dynamicShieldAVS);
+
+        DynamicShieldAVS(dynamicShieldAVSDeployment.dynamicShieldAVS)
+            .setPoolPartyDynamicShieldHook(
+                dynamicShieldHookDeployment.dynamicShield
+            );
 
         dynamicShieldAVSDeployment.strategy = address(dynamicShieldAVSStrategy);
         dynamicShieldAVSDeployment.token = address(token);

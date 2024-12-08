@@ -18,11 +18,7 @@ contract PoolModifyLiquidityTest is PoolTestBase {
     using LPFeeLibrary for uint24;
     using StateLibrary for IPoolManager;
 
-    address public owner;
-
-    constructor(IPoolManager _manager, address _owner) PoolTestBase(_manager) {
-        owner = address(_owner);
-    }
+    constructor(IPoolManager _manager) PoolTestBase(_manager) {}
 
     struct CallbackData {
         address sender;
@@ -79,7 +75,7 @@ contract PoolModifyLiquidityTest is PoolTestBase {
 
         (uint128 liquidityBefore, , ) = manager.getPositionInfo(
             data.key.toId(),
-            owner,
+            address(this),
             data.params.tickLower,
             data.params.tickUpper,
             data.params.salt
@@ -93,7 +89,7 @@ contract PoolModifyLiquidityTest is PoolTestBase {
 
         (uint128 liquidityAfter, , ) = manager.getPositionInfo(
             data.key.toId(),
-            owner,
+            address(this),
             data.params.tickLower,
             data.params.tickUpper,
             data.params.salt
@@ -102,12 +98,12 @@ contract PoolModifyLiquidityTest is PoolTestBase {
         (, , int256 delta0) = _fetchBalances(
             data.key.currency0,
             data.sender,
-            owner
+            address(this)
         );
         (, , int256 delta1) = _fetchBalances(
             data.key.currency1,
             data.sender,
-            owner
+            address(this)
         );
 
         require(

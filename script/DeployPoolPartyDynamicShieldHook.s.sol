@@ -15,6 +15,7 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {PoolPartyDynamicShieldHook, IFeeManager, IDynamicShieldAVS} from "../src/PoolPartyDynamicShieldHook.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
@@ -24,6 +25,7 @@ import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
+import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
 import {Planner, Plan} from "../src/library/external/Planner.sol";
 import {HookMiner} from "../utils/HookMiner.sol";
 import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
@@ -33,33 +35,53 @@ import {PositionDescriptor} from "v4-periphery/src/PositionDescriptor.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {WETH} from "solmate/src/tokens/WETH.sol";
 import {DynamicShieldHookDeploymentLib} from "../src/library/DynamicShieldHookDeploymentLib.sol";
+import {DynamicShieldAVSDeploymentLib} from "../src/eigenlayer/library/DynamicShieldAVSDeploymentLib.sol";
+import {DynamicShieldAVS} from "../test/mock/DynamicShieldAVS.sol";
+import {FeeManager} from "../test/mock/FeeManager.sol";
 import "forge-std/console.sol";
 
 contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
     using Planner for Plan;
     using LPFeeLibrary for uint24;
+    using PoolIdLibrary for PoolKey;
 
-    struct MintData {
-        uint256 balance0Before;
-        uint256 balance1Before;
-        bytes[] params;
-    }
+    // Helpful test constants
+    bytes constant ZERO_BYTES = Constants.ZERO_BYTES;
+    uint160 constant SQRT_PRICE_1_1 = Constants.SQRT_PRICE_1_1;
+    uint160 constant SQRT_PRICE_1_2 = Constants.SQRT_PRICE_1_2;
+    uint160 constant SQRT_PRICE_2_1 = Constants.SQRT_PRICE_2_1;
+    uint160 constant SQRT_PRICE_1_4 = Constants.SQRT_PRICE_1_4;
+    uint160 constant SQRT_PRICE_4_1 = Constants.SQRT_PRICE_4_1;
 
+    uint160 public constant MIN_PRICE_LIMIT = TickMath.MIN_SQRT_PRICE + 1;
+    uint160 public constant MAX_PRICE_LIMIT = TickMath.MAX_SQRT_PRICE - 1;
+
+    IPoolManager.ModifyLiquidityParams public LIQUIDITY_PARAMS =
+        IPoolManager.ModifyLiquidityParams({
+            tickLower: -120,
+            tickUpper: 120,
+            liquidityDelta: 1e18,
+            salt: 0
+        });
+    IPoolManager.ModifyLiquidityParams public REMOVE_LIQUIDITY_PARAMS =
+        IPoolManager.ModifyLiquidityParams({
+            tickLower: -120,
+            tickUpper: 120,
+            liquidityDelta: -1e18,
+            salt: 0
+        });
     uint256 constant STARTING_USER_BALANCE = 100_000_000_000 ether;
 
     uint128 public constant MAX_SLIPPAGE_INCREASE = type(uint128).max;
     uint256 public _deadline = block.timestamp + 1;
 
     PoolManager poolManager;
-    PoolSwapTest swapRouter =
-        PoolSwapTest(0xe49d2815C231826caB58017e214Bed19fE1c2dD4);
+    PoolSwapTest swapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
     PositionManager lpm;
     IAllowanceTransfer permit2 =
         IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3);
 
-    IFeeManager feeManager = IFeeManager(address(0x001));
-    IDynamicShieldAVS dynamicShieldAVS = IDynamicShieldAVS(address(0x002));
     IWETH9 public _WETH9 = IWETH9(address(new WETH()));
 
     Currency currency0;
@@ -71,6 +93,9 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
     PoolPartyDynamicShieldHook shieldHook;
 
     DynamicShieldHookDeploymentLib.DeploymentData dynamicShieldHookDeployment;
+    DynamicShieldAVSDeploymentLib.DeploymentData dynamicShieldAVSDeployment;
+    IDynamicShieldAVS dynamicShieldAVS;
+    IFeeManager feeManager;
 
     uint256 privateKey;
     address signerAddr;
@@ -81,10 +106,13 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
         signerAddr = vm.addr(privateKey);
         vm.startBroadcast(signerAddr);
         poolManager = new PoolManager(signerAddr);
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(
-            poolManager,
-            signerAddr
-        );
+
+        swapRouter = new PoolSwapTest(poolManager);
+
+        // dynamicShieldAVS = new DynamicShieldAVS();
+        feeManager = new FeeManager();
+
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(poolManager);
         PositionDescriptor positionDescriptor = new PositionDescriptor(
             poolManager,
             0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2,
@@ -100,18 +128,23 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
 
         deployMintAndApprove2Currencies();
 
-        console.log("poolManager:", address(poolManager));
-        console.log("modifyLiquidityRouter:", address(modifyLiquidityRouter));
-        console.log("PositionManager:", address(lpm));
+        console.log("\n poolManager:", address(poolManager));
+        console.log("\n swapRouter:", address(swapRouter));
+        console.log(
+            "\n modifyLiquidityRouter:",
+            address(modifyLiquidityRouter)
+        );
+        // console.log("PositionManager:", address(lpm));
 
-        console.log("currency0:", address(Currency.unwrap(currency0)));
-        console.log("currency1:", address(Currency.unwrap(currency1)));
+        console.log("\n currency0:", address(Currency.unwrap(currency0)));
+        console.log("\n currency1:", address(Currency.unwrap(currency1)));
 
         seedBalance(signerAddr);
 
         USDC = new MockERC20("USDC", "USDC", 6);
-        console.log("Deployed MockERC20 stableCurrency at", address(USDC));
+        console.log("\n stableCurrency:", address(USDC));
         stableCurrency = Currency.wrap(address(USDC));
+        USDC.mint(signerAddr, STARTING_USER_BALANCE);
         USDC.mint(signerAddr, STARTING_USER_BALANCE);
 
         // //Approve tokens
@@ -129,8 +162,6 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
         dynamicShieldHookDeployment = DynamicShieldHookDeploymentLib
             .deployContracts(
                 poolManager,
-                lpm,
-                permit2,
                 feeManager,
                 stableCurrency,
                 _feeInit,
@@ -138,72 +169,44 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
                 signerAddr
             );
 
+        dynamicShieldAVSDeployment = DynamicShieldAVSDeploymentLib
+            .readDeploymentJson(block.chainid);
+
+        console.log(
+            "\n PoolPartyDynamicShieldHook: ",
+            address(dynamicShieldHookDeployment.dynamicShield)
+        );
+
+        console.log(
+            "\n DynamicShieldAVS: ",
+            address(dynamicShieldAVSDeployment.dynamicShieldAVS)
+        );
+        console.log("\n \n");
+
+        shieldHook = PoolPartyDynamicShieldHook(
+            address(dynamicShieldHookDeployment.dynamicShield)
+        );
+
         vm.stopBroadcast();
 
         DynamicShieldHookDeploymentLib.writeDeploymentJson(
             dynamicShieldHookDeployment
         );
+
+        vm.startBroadcast(signerAddr);
+        //Initialize a pool with stableCurrency and token0/token1
+        _initPoolsForStableCurrency();
+        vm.stopBroadcast();
     }
 
     function run() public virtual {
         vm.startBroadcast(signerAddr);
 
-        // uint160 flags = uint160(
-        //     Hooks.BEFORE_INITIALIZE_FLAG |
-        //         Hooks.BEFORE_SWAP_FLAG |
-        //         Hooks.AFTER_SWAP_FLAG
-        // );
-
-        // // Find an address + salt using HookMiner that meets our flags criteria
-        // address CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
-        // (address hookAddress, bytes32 salt) = HookMiner.find(
-        //     CREATE2_DEPLOYER,
-        //     flags,
-        //     type(PoolPartyDynamicShieldHook).creationCode,
-        //     abi.encode(
-        //         poolManager,
-        //         lpm,
-        //         permit2,
-        //         feeManager,
-        //         stableCurrency,
-        //         _feeInit,
-        //         _feeMax,
-        //         signerAddr
-        //     )
-        // );
-
-        // //Deploy hook
-        // shieldHook = new PoolPartyDynamicShieldHook{salt: salt}(
-        //     poolManager,
-        //     lpm,
-        //     permit2,
-        //     feeManager,
-        //     stableCurrency,
-        //     _feeInit,
-        //     _feeMax,
-        //     signerAddr
-        // );
-        // shieldHook.registerAVS(address(dynamicShieldAVS));
-
-        // console.log("hookAddress:", address(shieldHook));
-        // console.log("create2Address:", hookAddress);
-
-        // // Ensure it got deployed to our pre-computed address
-        // require(address(shieldHook) == hookAddress, "hook address mismatch");
-
-        // console.log(
-        //     "Deployed PoolPartyDynamicShieldHook at",
-        //     address(shieldHook)
-        // );
-
-        // //Initialize a pool with these two tokens
-        // (key, tokenId) = _mintPositionAndIncreaseDecreaseLiquidity(
-        //     signerAddr,
-        //     shieldHook
-        // );
-        // console.log("tokenId:", tokenId);
-        // uint128 initialLiquidity = lpm.getPositionLiquidity(tokenId);
-        // console.log("Initial liquidity:", initialLiquidity);
+        //Initialize a pool with these two tokens
+        (key, tokenId) = _mintPositionAndAddLiquidity(signerAddr, shieldHook);
+        console.log("tokenId:", tokenId);
+        console.log("PoolId:");
+        console.logBytes32(PoolId.unwrap(key.toId()));
         vm.stopBroadcast();
     }
 
@@ -212,11 +215,11 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
         returns (PoolKey memory token0USDCKey, PoolKey memory token1USDCKey)
     {
         // Load configuration from environment or hardcode for testing
-        uint256 usdcAmount = 2000000e6;
+        uint256 usdcAmount = 2000000e19;
         uint24 fee = 3000;
 
         // Mint USDC
-        USDC.mint(msg.sender, usdcAmount);
+        USDC.mint(address(this), usdcAmount);
 
         // Approve tokens for liquidity router
         IERC20(address(USDC)).approve(
@@ -246,10 +249,10 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: TickMath.minUsableTick(60),
                 tickUpper: TickMath.maxUsableTick(60),
-                liquidityDelta: 1000e6,
+                liquidityDelta: 2000e6,
                 salt: bytes32(0)
             }),
-            abi.encode(address(signerAddr))
+            Constants.ZERO_BYTES
         );
 
         // Initialize token1/USDC pool and add liquidity
@@ -268,7 +271,7 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
                 liquidityDelta: 2000e6,
                 salt: bytes32(0)
             }),
-            abi.encode(address(signerAddr))
+            Constants.ZERO_BYTES
         );
     }
 
@@ -299,12 +302,10 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
         );
     }
 
-    function _mintPositionAndIncreaseDecreaseLiquidity(
+    function _mintPositionAndAddLiquidity(
         address _account,
         IHooks _hooks
     ) internal returns (PoolKey memory poolKey, uint256 _tokenId) {
-        _tokenId = lpm.nextTokenId();
-
         // Initialize a pool with these two tokens
         poolKey = _initPool(
             currency0,
@@ -314,120 +315,7 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
             Constants.SQRT_PRICE_1_1
         );
 
-        int24 tickLower = -120;
-        int24 tickUpper = 120;
-
-        // uint256 balanceBefore = currency0.balanceOf(address(_account));
-
-        // uint256 amountAfterMint = 990e18;
-
-        // // Calculcate the expected liquidity from the amounts after the transfer. They are the same for both currencies.
-        // uint256 expectedLiquidity = LiquidityAmounts.getLiquidityForAmounts(
-        //     Constants.SQRT_PRICE_1_1,
-        //     TickMath.getSqrtPriceAtTick(tickLower),
-        //     TickMath.getSqrtPriceAtTick(tickUpper),
-        //     amountAfterMint,
-        //     amountAfterMint
-        // );
-
-        // MintData memory mintData = MintData({
-        //     balance0Before: currency0.balanceOf(_account),
-        //     balance1Before: currency1.balanceOf(_account),
-        //     params: new bytes[](2)
-        // });
-        // mintData.params[0] = abi.encode(
-        //     poolKey,
-        //     tickLower,
-        //     tickUpper,
-        //     expectedLiquidity,
-        //     MAX_SLIPPAGE_INCREASE,
-        //     MAX_SLIPPAGE_INCREASE,
-        //     _account,
-        //     Constants.ZERO_BYTES
-        // );
-        // mintData.params[1] = abi.encode(currency0, currency1);
-
-        // lpm.modifyLiquidities(
-        //     abi.encode(
-        //         abi.encodePacked(
-        //             uint8(Actions.MINT_POSITION),
-        //             uint8(Actions.SETTLE_PAIR)
-        //         ),
-        //         mintData.params
-        //     ),
-        //     _deadline
-        // );
-        uint256 balanceBefore = currency0.balanceOf(_account);
-
-        uint256 amountAfterTransfer = 990e18;
-        uint256 amountToSend = 1000e18;
-
-        (uint256 amount0, uint256 amount1) = poolKey.currency0 == currency0
-            ? (amountToSend, amountAfterTransfer)
-            : (amountAfterTransfer, amountToSend);
-
-        // Calculcate the expected liquidity from the amounts after the transfer. They are the same for both currencies.
-        uint256 expectedLiquidity = LiquidityAmounts.getLiquidityForAmounts(
-            Constants.SQRT_PRICE_1_1,
-            TickMath.getSqrtPriceAtTick(tickLower),
-            TickMath.getSqrtPriceAtTick(tickUpper),
-            amount0,
-            amount1
-        );
-
-        Plan memory planner = Planner.init();
-        // planner.add(
-        //     Actions.SETTLE,
-        //     abi.encode(poolKey.currency0, amount0, true)
-        // );
-        // planner.add(
-        //     Actions.SETTLE,
-        //     abi.encode(poolKey.currency1, amount1, true)
-        // );
-        planner.add(
-            Actions.MINT_POSITION,
-            abi.encode(
-                poolKey,
-                tickLower,
-                tickUpper,
-                expectedLiquidity,
-                MAX_SLIPPAGE_INCREASE,
-                MAX_SLIPPAGE_INCREASE,
-                _account,
-                Constants.ZERO_BYTES
-            )
-        );
-        planner.finalizeModifyLiquidityWithSettlePair(poolKey);
-        // planner.finalizeModifyLiquidityWithClose(poolKey);
-
-        bytes memory plan = planner.encode();
-        lpm.modifyLiquidities(plan, _deadline);
-
-        uint256 balanceAfter = currency0.balanceOf(address(signerAddr));
-
-        console.log("lpm.ownerOf(tokenId)", lpm.ownerOf(_tokenId));
-        assertEq(lpm.ownerOf(_tokenId), address(signerAddr));
-        assertEq(lpm.getPositionLiquidity(_tokenId), expectedLiquidity);
-        assertEq(balanceBefore - balanceAfter, 990e18);
-    }
-
-    function _addLiquidityByLiquidityRouter(
-        PoolKey memory _key,
-        bytes32 _salt,
-        int24 _tickLower,
-        int24 _tickUpper,
-        int256 _liquidity
-    ) internal {
-        modifyLiquidityRouter.modifyLiquidity(
-            _key,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: _tickLower,
-                tickUpper: _tickUpper,
-                liquidityDelta: _liquidity,
-                salt: _salt
-            }),
-            Constants.ZERO_BYTES
-        );
+        _tokenId = _initShield(poolKey, _account);
     }
 
     function _initPool(
@@ -493,5 +381,76 @@ contract DeployPoolPartyDynamicShieldHook is Script, StdAssertions {
     function seedBalance(address to) internal {
         MockERC20(Currency.unwrap(currency0)).mint(to, STARTING_USER_BALANCE);
         MockERC20(Currency.unwrap(currency1)).mint(to, STARTING_USER_BALANCE);
+    }
+
+    function mapToAddLiquidityParams(
+        uint160 sqrtPriceX96,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 amount0,
+        uint256 amount1
+    ) public pure returns (IPoolManager.ModifyLiquidityParams memory params) {
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            amount0,
+            amount1
+        );
+
+        params = IPoolManager.ModifyLiquidityParams({
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: int256(uint256(liquidity)),
+            salt: bytes32(0)
+        });
+    }
+
+    function mapToRemoveLiquidityParams(
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidity
+    ) public pure returns (IPoolManager.ModifyLiquidityParams memory params) {
+        params = IPoolManager.ModifyLiquidityParams({
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: liquidity,
+            salt: bytes32(0)
+        });
+    }
+
+    function _initShield(
+        PoolKey memory _poolKey,
+        address _account
+    ) internal returns (uint256 _tokenId) {
+        IERC20(address(USDC)).approve(address(shieldHook), type(uint256).max);
+        IERC20(Currency.unwrap(currency0)).approve(
+            address(shieldHook),
+            type(uint256).max
+        );
+        IERC20(Currency.unwrap(currency1)).approve(
+            address(shieldHook),
+            type(uint256).max
+        );
+
+        _tokenId = shieldHook.initializeShield(
+            _poolKey,
+            mapToAddLiquidityParams(
+                SQRT_PRICE_1_1,
+                LIQUIDITY_PARAMS.tickLower,
+                LIQUIDITY_PARAMS.tickUpper,
+                100e18,
+                100e18
+            ),
+            100e18,
+            100e18
+        );
+
+        console.log("minted _tokenId: ", _tokenId);
+        console.log(
+            "position Liquidity: ",
+            shieldHook.getPositionLiquidity(_tokenId)
+        );
+        assertEq(shieldHook.ownerOf(_tokenId), _account);
     }
 }

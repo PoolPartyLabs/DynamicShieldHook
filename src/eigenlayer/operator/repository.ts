@@ -26,7 +26,7 @@ export async function createTable() {
   await _knex.schema.createTable("shields", (table) => {
     table.increments("id");
     table.string("pool_id");
-    table.integer("token_id").unique();
+    table.integer("token_id");
     table.integer("tick_low");
     table.integer("tick_upper");
     table.timestamp("created_at").defaultTo(_knex.fn.now());

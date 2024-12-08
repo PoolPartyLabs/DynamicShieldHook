@@ -20,6 +20,7 @@ import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-core/src/libraries/SqrtPriceMath.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 
 /** Uniswap v4 Periphery */
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -32,6 +33,8 @@ import {PoolVaultManager} from "./PoolVaultManager.sol";
 import {IDynamicShieldAVS} from "./eigenlayer/IDynamicShieldAVS.sol";
 import {IFeeManager} from "./interfaces/IFeeManager.sol";
 import {IPoolPartyDynamicShieldHook} from "./interfaces/IPoolPartyDynamicShieldHook.sol";
+import {IPoolModifyLiquidity} from "./interfaces/IPoolModifyLiquidity.sol";
+import {LiquidityAmounts} from "./library/external/LiquidityAmounts.sol";
 
 import {console} from "forge-std/Test.sol";
 
@@ -47,9 +50,7 @@ contract PoolPartyDynamicShieldHook is
     using PositionInfoLibrary for PositionInfo;
     using LPFeeLibrary for uint24;
 
-    IPositionManager s_positionManager;
     PoolVaultManager s_vaultManager;
-    IAllowanceTransfer s_permit2;
     IFeeManager s_feeManager;
     IDynamicShieldAVS s_dynamicShieldAVS;
     uint24 public s_feeInit;
@@ -67,23 +68,17 @@ contract PoolPartyDynamicShieldHook is
     // Initialize BaseHook parent contract in the constructor
     constructor(
         IPoolManager _poolManager,
-        IPositionManager _positionManager,
-        IAllowanceTransfer _permit2,
         IFeeManager _feeManager,
         Currency _safeToken,
         uint24 _feeInit,
         uint24 _feeMax,
         address _initialOwner
     ) BaseHook(_poolManager) Ownable(_initialOwner) {
-        s_positionManager = _positionManager;
         s_vaultManager = new PoolVaultManager(
             _poolManager,
-            _positionManager,
-            _permit2,
             _safeToken,
             address(this)
         );
-        s_permit2 = _permit2;
         s_feeInit = _feeInit;
         s_feeMax = _feeMax;
         s_feeManager = _feeManager;
@@ -122,14 +117,66 @@ contract PoolPartyDynamicShieldHook is
 
     function initializeShield(
         PoolKey calldata _poolKey,
-        uint256 _tokenId
-    ) external {
-        IERC721(address(s_positionManager)).safeTransferFrom(
+        IPoolManager.ModifyLiquidityParams memory _params,
+        uint256 _amount0Desired,
+        uint256 _amount1Desired
+    ) external returns (uint256 tokenId) {
+        IERC20(Currency.unwrap(_poolKey.currency0)).transferFrom(
             msg.sender,
             address(this),
-            _tokenId,
-            abi.encode(_poolKey)
+            _amount0Desired
         );
+        IERC20(Currency.unwrap(_poolKey.currency1)).transferFrom(
+            msg.sender,
+            address(this),
+            _amount1Desired
+        );
+
+        IERC20(Currency.unwrap(_poolKey.currency0)).approve(
+            address(s_vaultManager),
+            _amount0Desired
+        );
+        IERC20(Currency.unwrap(_poolKey.currency1)).approve(
+            address(s_vaultManager),
+            _amount1Desired
+        );
+
+        tokenId = s_vaultManager.mint(
+            _poolKey,
+            _params,
+            msg.sender,
+            _amount0Desired,
+            _amount1Desired
+        );
+
+        PoolId poolId = _poolKey.toId();
+
+        (, IPoolModifyLiquidity.PositionInfo memory info) = s_vaultManager
+            .getPoolAndPositionInfo(tokenId);
+        uint128 liquidity = s_vaultManager.getPositionLiquidity(tokenId);
+
+        s_feeManager.updateFeePerTick(
+            PoolId.unwrap(poolId),
+            liquidity,
+            int32(info.tickLower),
+            int32(info.tickUpper),
+            uint32(uint24(_poolKey.tickSpacing)),
+            uint32(s_feeInit),
+            uint32(s_feeMax)
+        );
+
+        s_shieldInfos[poolId] = ShieldInfo({tokenId: tokenId});
+
+        s_tokenIds[poolId].push(tokenId);
+
+        if (address(s_dynamicShieldAVS) != address(0)) {
+            s_dynamicShieldAVS.notifyRegisterShield(
+                PoolId.unwrap(poolId),
+                info.tickLower,
+                info.tickUpper,
+                tokenId
+            );
+        }
     }
 
     function beforeInitialize(
@@ -148,7 +195,7 @@ contract PoolPartyDynamicShieldHook is
     function beforeSwap(
         address,
         PoolKey calldata _poolKey,
-        IPoolManager.SwapParams calldata _params,
+        IPoolManager.SwapParams calldata,
         bytes calldata
     )
         external
@@ -167,18 +214,22 @@ contract PoolPartyDynamicShieldHook is
         poolManager.updateDynamicLPFee(_poolKey, fee);
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
 
-        uint128 liquidity = poolManager.getLiquidity(poolId);
-        uint160 nextSqrtPriceX96 = currentSqrtPriceX96
-            .getNextSqrtPriceFromInput(
-                liquidity,
-                uint256(_params.amountSpecified),
-                _params.zeroForOne
+        // @todo Check in the future why is not working with multiple swaps at the same block
+        // uint128 liquidity = poolManager.getLiquidity(poolId);
+        // uint160 nextSqrtPriceX96 = currentSqrtPriceX96
+        //     .getNextSqrtPriceFromInput(
+        //         liquidity,
+        //         uint256(_params.amountSpecified),
+        //         _params.zeroForOne
+        //     );
+
+        // int24 nextTick = TickMath.getTickAtSqrtPrice(nextSqrtPriceX96);
+        if (address(s_dynamicShieldAVS) != address(0)) {
+            s_dynamicShieldAVS.notifyTickEvent(
+                PoolId.unwrap(poolId),
+                currentTick
             );
-
-        int24 nextTick = TickMath.getTickAtSqrtPrice(nextSqrtPriceX96);
-
-        s_dynamicShieldAVS.notifyTickEvent(PoolId.unwrap(poolId), nextTick);
-
+        }
         return (
             this.beforeSwap.selector,
             BeforeSwapDeltaLibrary.ZERO_DELTA,
@@ -192,74 +243,20 @@ contract PoolPartyDynamicShieldHook is
         IPoolManager.SwapParams calldata,
         BalanceDelta,
         bytes calldata
-    ) external override(BaseHook, IHooks) returns (bytes4, int128) {
+    ) external view override(BaseHook, IHooks) returns (bytes4, int128) {
         PoolId poolId = _poolKey.toId();
         (uint160 currentSqrtPriceX96, , , ) = poolManager.getSlot0(poolId);
 
         int24 currentTick = TickMath.getTickAtSqrtPrice(currentSqrtPriceX96);
         console.log("afterSwap.currentTick", currentTick);
-        if (currentTick == -2) {
-            uint256[] memory _tokenIds = s_tokenIds[poolId];
-            s_vaultManager.removeLiquidityInBatch(poolId, _tokenIds);
-        }
-
         return (this.afterSwap.selector, 0);
-    }
-
-    function onERC721Received(
-        address _operator,
-        address _from,
-        uint256 _tokenId,
-        bytes calldata _data
-    ) external returns (bytes4) {
-        if (msg.sender != address(s_positionManager))
-            revert InvalidPositionManager();
-        if (_operator != address(this)) revert InvalidSelf();
-
-        PoolKey memory poolKey = abi.decode(_data, (PoolKey));
-        PoolId poolId = poolKey.toId();
-
-        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
-            _tokenId
-        );
-        uint128 liquidity = s_positionManager.getPositionLiquidity(_tokenId);
-
-        s_feeManager.updateFeePerTick(
-            PoolId.unwrap(poolId),
-            liquidity,
-            int32(info.tickLower()),
-            int32(info.tickUpper()),
-            uint32(uint24(poolKey.tickSpacing)),
-            uint32(s_feeInit),
-            uint32(s_feeMax)
-        );
-
-        s_shieldInfos[poolId] = ShieldInfo({tokenId: _tokenId});
-
-        IERC721(address(s_positionManager)).approve(
-            address(s_vaultManager),
-            _tokenId
-        );
-        s_vaultManager.depositPosition(poolKey, _tokenId, _from);
-
-        s_tokenIds[poolId].push(_tokenId);
-
-        s_dynamicShieldAVS.notifyRegisterShield(
-            PoolId.unwrap(poolId),
-            info.tickLower(),
-            info.tickUpper(),
-            _tokenId
-        );
-
-        return this.onERC721Received.selector;
     }
 
     function addLiquidty(
         PoolKey calldata _poolKey,
         uint256 _tokenId,
         uint256 _amount0,
-        uint256 _amount1,
-        uint256 _deadline
+        uint256 _amount1
     ) external {
         IERC20(Currency.unwrap(_poolKey.currency0)).transferFrom(
             msg.sender,
@@ -282,20 +279,19 @@ contract PoolPartyDynamicShieldHook is
         s_vaultManager.addLiquidity(
             _poolKey,
             _tokenId,
+            msg.sender,
             _amount0,
-            _amount1,
-            _deadline
+            _amount1
         );
-        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
-            _tokenId
-        );
-        uint128 liquidity = s_positionManager.getPositionLiquidity(_tokenId);
+        (, IPoolModifyLiquidity.PositionInfo memory info) = s_vaultManager
+            .getPoolAndPositionInfo(_tokenId);
+        uint128 liquidity = s_vaultManager.getPositionLiquidity(_tokenId);
 
         s_feeManager.updateFeePerTick(
             PoolId.unwrap(_poolKey.toId()),
             liquidity,
-            int32(info.tickLower()),
-            int32(info.tickUpper()),
+            int32(info.tickLower),
+            int32(info.tickUpper),
             uint32(uint24(_poolKey.tickSpacing)),
             uint32(s_feeInit),
             uint32(s_feeMax)
@@ -305,25 +301,22 @@ contract PoolPartyDynamicShieldHook is
     function removeLiquidity(
         PoolKey memory _poolKey,
         uint256 _tokenId,
-        uint128 _percentage,
-        uint256 _deadline
+        uint128 _percentage
     ) external {
         s_vaultManager.removeLiquidity(
             _poolKey,
             _tokenId,
             _percentage,
-            _deadline
+            msg.sender
         );
-        (, PositionInfo info) = s_positionManager.getPoolAndPositionInfo(
-            _tokenId
-        );
-        uint128 liquidity = s_positionManager.getPositionLiquidity(_tokenId);
-
+        (, IPoolModifyLiquidity.PositionInfo memory info) = s_vaultManager
+            .getPoolAndPositionInfo(_tokenId);
+        uint128 liquidity = s_vaultManager.getPositionLiquidity(_tokenId);
         s_feeManager.updateFeePerTick(
             PoolId.unwrap(_poolKey.toId()),
             liquidity,
-            int32(info.tickLower()),
-            int32(info.tickUpper()),
+            int32(info.tickLower),
+            int32(info.tickUpper),
             uint32(uint24(_poolKey.tickSpacing)),
             uint32(s_feeInit),
             uint32(s_feeMax)
@@ -334,19 +327,38 @@ contract PoolPartyDynamicShieldHook is
         PoolId _poolId,
         uint256[] memory _tokenIds
     ) external onlyAVS {
-        s_vaultManager.removeLiquidityInBatch(_poolId, _tokenIds);
+        s_vaultManager.removeLiquidityInBatch(_poolId, _tokenIds, false);
     }
 
-    function collectFees(
-        PoolKey memory _key,
-        uint256 _tokenId,
-        uint256 _deadline
-    ) external {
-        s_vaultManager.collectFees(_key, _tokenId, _deadline);
+    function collectFees(PoolKey memory _key, uint256 _tokenId) external {
+        s_vaultManager.collectFees(_key, _tokenId, msg.sender);
     }
 
     function getVaulManagerAddress() public view returns (address) {
         return address(s_vaultManager);
+    }
+
+    function getPoolAndPositionInfo(
+        uint256 tokenId
+    )
+        external
+        view
+        returns (
+            PoolKey memory poolKey,
+            IPoolModifyLiquidity.PositionInfo memory info
+        )
+    {
+        return s_vaultManager.getPoolAndPositionInfo(tokenId);
+    }
+
+    function getPositionLiquidity(
+        uint256 tokenId
+    ) external view returns (uint128 liquidity) {
+        return s_vaultManager.getPositionLiquidity(tokenId);
+    }
+
+    function ownerOf(uint256 _tokenId) external view returns (address owner) {
+        return s_vaultManager.ownerOf(_tokenId);
     }
 
     function getTickSpacingValue(

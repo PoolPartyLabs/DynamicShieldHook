@@ -19,6 +19,8 @@ abstract contract DeltaResolver is ImmutableState {
     /// @notice Emitted when the contract does not have enough balance to wrap or unwrap.
     error InsufficientBalance();
 
+    constructor(IPoolManager _poolManager) ImmutableState(_poolManager) {}
+
     /// @notice Take an amount of currency out of the PoolManager
     /// @param currency Currency to take
     /// @param recipient Address to receive the currency

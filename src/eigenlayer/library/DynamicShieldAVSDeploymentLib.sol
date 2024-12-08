@@ -37,16 +37,11 @@ library DynamicShieldAVSDeploymentLib {
 
     function deployContracts(
         address proxyAdmin,
-        IPoolPartyDynamicShieldHook hook,
         CoreDeploymentLib.DeploymentData memory core,
         Quorum memory quorum
     ) internal returns (DeploymentData memory) {
         DeploymentData memory result;
         {
-            result.dynamicShieldHook = address(hook);
-
-            // console2.log(" DynamicShieldHook ", address(hook));
-
             // First, deploy upgradeable proxy contracts that will point to the implementations.
             result.dynamicShieldAVS = UpgradeableProxyLib.setUpEmptyProxy(
                 proxyAdmin
@@ -61,7 +56,6 @@ library DynamicShieldAVSDeploymentLib {
         );
         address dynamicShieldAVSImpl = address(
             new DynamicShieldAVS(
-                hook,
                 core.avsDirectory,
                 result.stakeRegistry,
                 core.rewardsCoordinator,
@@ -90,7 +84,7 @@ library DynamicShieldAVSDeploymentLib {
     function readDeploymentJson(
         uint256 chainId
     ) internal returns (DeploymentData memory) {
-        return readDeploymentJson("deployments/", chainId);
+        return readDeploymentJson("deployments/dynamic-shield-avs/", chainId);
     }
 
     function readDeploymentJson(

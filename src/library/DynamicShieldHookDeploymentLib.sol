@@ -34,8 +34,6 @@ library DynamicShieldHookDeploymentLib {
 
     function deployContracts(
         IPoolManager _poolManager,
-        IPositionManager _positionManager,
-        IAllowanceTransfer _permit2,
         IFeeManager _feeManager,
         Currency _safeToken,
         uint24 _feeInit,
@@ -58,8 +56,6 @@ library DynamicShieldHookDeploymentLib {
             type(PoolPartyDynamicShieldHook).creationCode,
             abi.encode(
                 _poolManager,
-                _positionManager,
-                _permit2,
                 _feeManager,
                 _safeToken,
                 _feeInit,
@@ -71,8 +67,6 @@ library DynamicShieldHookDeploymentLib {
         result.dynamicShield = address(
             new PoolPartyDynamicShieldHook{salt: salt}(
                 _poolManager,
-                _positionManager,
-                _permit2,
                 _feeManager,
                 _safeToken,
                 _feeInit,

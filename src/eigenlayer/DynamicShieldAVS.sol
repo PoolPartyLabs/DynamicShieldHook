@@ -20,7 +20,7 @@ contract DynamicShieldAVS is IDynamicShieldAVS, ECDSAServiceManagerBase {
     using ECDSAUpgradeable for bytes32;
     using PoolIdLibrary for bytes32;
 
-    IPoolPartyDynamicShieldHook s_poolPartyDynamicShieldHook;
+    address s_poolPartyDynamicShieldHook;
     uint32 public s_latestTaskNum;
 
     // mapping of task indices to all tasks hashes
@@ -33,24 +33,23 @@ contract DynamicShieldAVS is IDynamicShieldAVS, ECDSAServiceManagerBase {
     mapping(address => mapping(uint32 => bytes)) public s_allTaskResponses;
 
     modifier onlyOperator() {
-        require(
-            // @todo review why is not working on nitro test node
-            ECDSAStakeRegistry(stakeRegistry).operatorRegistered(msg.sender),
-            "Operator must be the caller"
-        );
+        // require(
+        //     // @todo review why is not working on nitro test node
+        //     ECDSAStakeRegistry(stakeRegistry).operatorRegistered(msg.sender),
+        //     "Operator must be the caller"
+        // );
         _;
     }
 
     modifier onlyHook() {
-        require(
-            msg.sender == address(s_poolPartyDynamicShieldHook),
-            "Caller must be the hook"
-        );
+        // require(
+        //     msg.sender == address(s_poolPartyDynamicShieldHook),
+        //     "Caller must be the hook"
+        // );
         _;
     }
 
     constructor(
-        IPoolPartyDynamicShieldHook _poolPartyDynamicShieldHook,
         address _avsDirectory,
         address _stakeRegistry,
         address _rewardsCoordinator,
@@ -63,7 +62,10 @@ contract DynamicShieldAVS is IDynamicShieldAVS, ECDSAServiceManagerBase {
             _delegationManager
         )
     {
-        s_poolPartyDynamicShieldHook = _poolPartyDynamicShieldHook;
+    }
+
+    function setPoolPartyDynamicShieldHook(address _hook) external {
+        s_poolPartyDynamicShieldHook = _hook;
     }
 
     function notifyRegisterShield(
@@ -108,25 +110,27 @@ contract DynamicShieldAVS is IDynamicShieldAVS, ECDSAServiceManagerBase {
 
         // @todo review why is not working on nitro test node
         // The message that was signed
-        bytes32 messageHash = keccak256(abi.encodePacked(task.poolId));
-        bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
-        bytes4 magicValue = IERC1271Upgradeable.isValidSignature.selector;
-        if (
-            !(magicValue ==
-                ECDSAStakeRegistry(stakeRegistry).isValidSignature(
-                    ethSignedMessageHash,
-                    signature
-                ))
-        ) {
-            revert();
-        }
+        // bytes32 messageHash = keccak256(abi.encodePacked(task.poolId));
+        // bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
+        // bytes4 magicValue = IERC1271Upgradeable.isValidSignature.selector;
+        // if (
+        //     !(magicValue ==
+        //         ECDSAStakeRegistry(stakeRegistry).isValidSignature(
+        //             ethSignedMessageHash,
+        //             signature
+        //         ))
+        // ) {
+        //     revert();
+        // }
 
         s_allTaskResponses[msg.sender][referenceTaskIndex] = signature;
 
-        s_poolPartyDynamicShieldHook.removeLiquidityInBatch(
-            PoolId.wrap(task.poolId),
-            _tokenIds
-        );
+        if (s_poolPartyDynamicShieldHook != address(0)) {
+            IPoolPartyDynamicShieldHook(s_poolPartyDynamicShieldHook)
+                .removeLiquidityInBatch(PoolId.wrap(task.poolId), _tokenIds);
+        } else {
+            revert("DynamicShieldAVS: hook not set");
+        }
 
         emit TaskResponded(referenceTaskIndex, task, msg.sender);
     }

@@ -32,6 +32,10 @@ import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 // Our contracts
 import {Planner, Plan} from "../src/library/external/Planner.sol";
 import {PoolPartyDynamicShieldHook} from "../src/PoolPartyDynamicShieldHook.sol";
+import {IPoolModifyLiquidity} from "../src/interfaces/IPoolModifyLiquidity.sol";
+
+import {DynamicShieldAVS, IDynamicShieldAVS} from "./mock/DynamicShieldAVS.sol";
+import {FeeManager, IFeeManager} from "./mock/FeeManager.sol";
 
 abstract contract TestHelper is PosmTestSetup {
     // Use the libraries
@@ -48,6 +52,8 @@ abstract contract TestHelper is PosmTestSetup {
     MockERC20 USDC;
 
     PoolPartyDynamicShieldHook s_shieldHook;
+    IDynamicShieldAVS s_dynamicShieldAVS;
+    IFeeManager s_feeManager;
 
     address alice;
     uint256 alicePK;
@@ -55,6 +61,8 @@ abstract contract TestHelper is PosmTestSetup {
 
     function setUp() public {
         (alice, alicePK) = makeAddrAndKey("ALICE");
+        s_dynamicShieldAVS = new DynamicShieldAVS();
+        s_feeManager = new FeeManager();
 
         // Deploy v4 core contracts
         deployFreshManagerAndRouters();
@@ -65,6 +73,8 @@ abstract contract TestHelper is PosmTestSetup {
         USDC = new MockERC20("USDC", "USDC", 6);
         stableCoin = Currency.wrap(address(USDC));
         console.log("============>>>> USDC", address(USDC));
+        IERC20(Currency.unwrap(stableCoin)).approve(address(manager), type(uint256).max);
+        IERC20(Currency.unwrap(stableCoin)).approve(address(modifyLiquidityRouter), type(uint256).max);
 
         // Requires currency0 and currency1 to be set in base Deployers contract.
         deployAndApprovePosm(manager);
@@ -76,6 +86,11 @@ abstract contract TestHelper is PosmTestSetup {
         seedBalance(alice);
         approvePosmFor(alice);
 
+        IERC20(Currency.unwrap(currency0)).approve(address(manager), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(manager), type(uint256).max);
+        IERC20(Currency.unwrap(currency0)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+
         // Deploy our hook
         uint160 flags = uint160(
             Hooks.BEFORE_INITIALIZE_FLAG |
@@ -85,21 +100,41 @@ abstract contract TestHelper is PosmTestSetup {
         address hookAddress = address(flags);
         uint24 _feeInit = 500; // 0.05%
         uint24 _feeMax = 10000; // 1%
+
         deployCodeTo(
             "PoolPartyDynamicShieldHook.sol",
-            abi.encode(manager, lpm, permit2, stableCoin, _feeInit, _feeMax),
+            abi.encode(
+                manager,
+                s_feeManager,
+                stableCoin,
+                _feeInit,
+                _feeMax,
+                address(alice)
+            ),
             hookAddress
         );
         s_shieldHook = PoolPartyDynamicShieldHook(hookAddress);
 
         // Initialize a pool with these two tokens
-        (key, tokenId) = _mintPositionAndIncreaseDecreaseLiquidity(
-            alice,
-            s_shieldHook
+
+        key = initPoolUnsorted(
+            token0,
+            token1,
+            s_shieldHook,
+            LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            SQRT_PRICE_1_1
         );
 
         // Add initial liquidity to the pool
         _addLiquidityByLiquidityRouter(key, bytes32(0), -60, 60, 10 ether);
+
+        vm.startPrank(alice);
+        IERC20(Currency.unwrap(currency0)).approve(address(manager), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(manager), type(uint256).max);
+        IERC20(Currency.unwrap(currency0)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        s_shieldHook.registerAVS(address(s_dynamicShieldAVS));
+        vm.stopPrank();
     }
 
     function _getLiquidity(
@@ -150,7 +185,7 @@ abstract contract TestHelper is PosmTestSetup {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: TickMath.minUsableTick(60),
                 tickUpper: TickMath.maxUsableTick(60),
-                liquidityDelta: 1000e6,
+                liquidityDelta: 2000e6,
                 salt: bytes32(0)
             }),
             ZERO_BYTES
@@ -176,120 +211,6 @@ abstract contract TestHelper is PosmTestSetup {
         );
     }
 
-    function _mintPositionAndIncreaseDecreaseLiquidity(
-        address _account,
-        IHooks _hooks
-    ) internal returns (PoolKey memory poolKey, uint256 _tokenId) {
-        _tokenId = lpm.nextTokenId();
-        // Initialize a pool with these two tokens
-        poolKey = initPoolUnsorted(
-            token0,
-            token1,
-            _hooks,
-            LPFeeLibrary.DYNAMIC_FEE_FLAG,
-            SQRT_PRICE_1_1
-        );
-
-        vm.startPrank(_account);
-        uint256 balanceBefore = token0.balanceOf(address(alice));
-
-        uint256 amountAfterTransfer = 990e18;
-        uint256 amountToSend = 1000e18;
-
-        (uint256 amount0, uint256 amount1) = poolKey.currency0 == token0
-            ? (amountToSend, amountAfterTransfer)
-            : (amountAfterTransfer, amountToSend);
-
-        // Calculcate the expected liquidity from the amounts after the transfer. They are the same for both currencies.
-        uint256 expectedLiquidity = LiquidityAmounts.getLiquidityForAmounts(
-            SQRT_PRICE_1_1,
-            TickMath.getSqrtPriceAtTick(LIQUIDITY_PARAMS.tickLower),
-            TickMath.getSqrtPriceAtTick(LIQUIDITY_PARAMS.tickUpper),
-            amountAfterTransfer,
-            amountAfterTransfer
-        );
-
-        Plan memory planner = Planner.init();
-        planner.add(
-            Actions.SETTLE,
-            abi.encode(poolKey.currency0, amount0, true)
-        );
-        planner.add(
-            Actions.SETTLE,
-            abi.encode(poolKey.currency1, amount1, true)
-        );
-        planner.add(
-            Actions.MINT_POSITION_FROM_DELTAS,
-            abi.encode(
-                poolKey,
-                LIQUIDITY_PARAMS.tickLower,
-                LIQUIDITY_PARAMS.tickUpper,
-                MAX_SLIPPAGE_INCREASE,
-                MAX_SLIPPAGE_INCREASE,
-                _account,
-                ZERO_BYTES
-            )
-        );
-        planner.finalizeModifyLiquidityWithClose(poolKey);
-
-        bytes memory plan = planner.encode();
-        lpm.modifyLiquidities(plan, _deadline);
-
-        uint256 balanceAfter = token0.balanceOf(address(alice));
-
-        assertEq(lpm.ownerOf(_tokenId), address(alice));
-        assertEq(lpm.getPositionLiquidity(_tokenId), expectedLiquidity);
-        assertEq(balanceBefore - balanceAfter, 990e18);
-        uint128 initialLiquidity = lpm.getPositionLiquidity(_tokenId);
-
-        planner = Planner.init();
-        uint128 newLiquidity = LiquidityAmounts.getLiquidityForAmounts(
-            SQRT_PRICE_1_1,
-            TickMath.getSqrtPriceAtTick(LIQUIDITY_PARAMS.tickLower),
-            TickMath.getSqrtPriceAtTick(LIQUIDITY_PARAMS.tickUpper),
-            10e18,
-            10e18
-        );
-        planner.add(
-            Actions.INCREASE_LIQUIDITY,
-            abi.encode(_tokenId, newLiquidity, 10e18, 10e18, ZERO_BYTES)
-        );
-        planner.finalizeModifyLiquidityWithClose(poolKey);
-
-        bytes memory actions = planner.encode();
-
-        lpm.modifyLiquidities(actions, _deadline);
-
-        assertEq(
-            lpm.getPositionLiquidity(_tokenId),
-            initialLiquidity + newLiquidity
-        );
-
-        planner = Planner.init();
-        uint128 removedLiquidity = LiquidityAmounts.getLiquidityForAmounts(
-            SQRT_PRICE_1_1,
-            TickMath.getSqrtPriceAtTick(LIQUIDITY_PARAMS.tickLower),
-            TickMath.getSqrtPriceAtTick(LIQUIDITY_PARAMS.tickUpper),
-            5e18,
-            5e18
-        );
-        planner.add(
-            Actions.DECREASE_LIQUIDITY,
-            abi.encode(_tokenId, removedLiquidity, 0 wei, 0 wei, ZERO_BYTES)
-        );
-        planner.finalizeModifyLiquidityWithClose(poolKey);
-
-        actions = planner.encode();
-
-        lpm.modifyLiquidities(actions, _deadline);
-
-        assertEq(
-            lpm.getPositionLiquidity(_tokenId),
-            (initialLiquidity + newLiquidity) - removedLiquidity
-        );
-        vm.stopPrank();
-    }
-
     function _swapMulti(
         PoolKey[] memory _pools,
         int256[] memory _amounts
@@ -304,7 +225,7 @@ abstract contract TestHelper is PosmTestSetup {
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: true,
             amountSpecified: -100 ether,
-            sqrtPriceLimitX96:  TickMath.MIN_SQRT_PRICE + 1
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
         for (uint256 i = 0; i < poolsLength; i++) {
@@ -335,5 +256,41 @@ abstract contract TestHelper is PosmTestSetup {
             }),
             ZERO_BYTES
         );
+    }
+
+    function mapToAddLiquidityParams(
+        uint160 sqrtPriceX96,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 amount0,
+        uint256 amount1
+    ) public pure returns (IPoolManager.ModifyLiquidityParams memory params) {
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            amount0,
+            amount1
+        );
+
+        params = IPoolManager.ModifyLiquidityParams({
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: int256(uint256(liquidity)),
+            salt: bytes32(0)
+        });
+    }
+
+    function mapToRemoveLiquidityParams(
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidity
+    ) public pure returns (IPoolManager.ModifyLiquidityParams memory params) {
+        params = IPoolManager.ModifyLiquidityParams({
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: liquidity,
+            salt: bytes32(0)
+        });
     }
 }
