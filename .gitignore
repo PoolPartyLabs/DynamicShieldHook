@@ -13,3 +13,8 @@ docs/
 # Dotenv file
 .env
 .env.*
+!.env.example
+
+contracts/deployments/
+
+node_modules/

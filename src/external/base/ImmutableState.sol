@@ -6,7 +6,7 @@ import {IImmutableState} from "v4-periphery/src/interfaces/IImmutableState.sol";
 
 /// @title Immutable State
 /// @notice A collection of immutable state variables, commonly used across multiple contracts
-contract ImmutableState is IImmutableState {
+abstract contract ImmutableState is IImmutableState {
     /// @inheritdoc IImmutableState
     IPoolManager public immutable poolManager;
 

@@ -1,0 +1,25 @@
+{
+  "name": "docker-node-oracle",
+  "version": "1.0.0",
+  "description": "A simple Node.js Oracle with Docker",
+  "main": "listener.ts",
+  "type": "module",
+  "scripts": {
+    "listener": "npx tsx listener.ts",
+    "worker": "npx tsx worker.ts",
+    "migrate": "npx knex migrate:latest --knexfile ./knexfile.cjs"
+  },
+  "dependencies": {
+    "@ethersproject/units": "^5.7.0",
+    "@types/node": "^22.10.1",
+    "ethers": "^6.13.4",
+    "knex": "^3.1.0",
+    "pg": "^8.13.1",
+    "pg-boss": "^10.1.5",
+    "pg-native": "^3.2.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2",
+    "viem": "^2.21.36",
+    "wagmi": "^2.12.25"
+  }
+}

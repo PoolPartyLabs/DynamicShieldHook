@@ -74,3 +74,17 @@ $ forge --help
 $ anvil --help
 $ cast --help
 ```
+
+
+# Updates dependencies if necessary and builds the contracts 
+npm run build
+
+# Deploy the EigenLayer contracts
+npm run deploy:core
+
+# Deploy the Pool Vault Manager AVS contracts
+npm run deploy:avs
+
+# (Optional) Update ABIs
+npm run extract:abis
+ 

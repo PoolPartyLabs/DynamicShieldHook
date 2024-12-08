@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 /** OpenZeppelin Contracts */
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -31,14 +31,18 @@ import {CalldataDecoder} from "v4-periphery/src/libraries/CalldataDecoder.sol";
 /** Internal */
 import {Planner, Plan} from "./library/external/Planner.sol";
 import {LiquidityAmounts} from "./library/external/LiquidityAmounts.sol";
-
 import {V4Router, IV4Router} from "./external/V4Router.sol";
-
-import {console} from "forge-std/Test.sol";
+import {IPoolVaultManager} from "./interfaces/IPoolVaultManager.sol";
+import {PoolModifyLiquidity} from "./external/PoolModifyLiquidity.sol";
 
 bytes constant ZERO_BYTES = new bytes(0);
 
-contract PoolVaultManager is V4Router, Ownable {
+contract PoolVaultManager is
+    IPoolVaultManager,
+    PoolModifyLiquidity,
+    V4Router,
+    Ownable
+{
     using PoolIdLibrary for PoolKey;
     using Planner for Plan;
     using StateLibrary for IPoolManager;
@@ -47,189 +51,158 @@ contract PoolVaultManager is V4Router, Ownable {
     using SafeTransferLib for *;
     using CalldataDecoder for bytes;
 
-    struct Position {
-        PoolKey key;
-        address owner;
-        uint256 tokenId;
-    }
-
-    struct PositionTotalSupply {
-        PoolKey key;
-        uint256 tokenId;
-        uint256 amount0;
-        uint256 amount1;
-    }
-
-    struct CallData {
-        PoolKey key;
-        address owner;
-    }
-
-    IPositionManager private s_lpm;
-    IAllowanceTransfer private s_permit2;
     Currency private s_safeToken;
-    mapping(uint256 tokenId => Position) private s_postions;
     mapping(PoolId => PoolKey) private s_poolKeys;
-
-    error InvalidPositionManager();
-    error InvalidHook();
-    error InvalidSelf();
 
     constructor(
         IPoolManager _pm,
-        IPositionManager _lpm,
-        IAllowanceTransfer _permit2,
         Currency _safeToken,
         address _hook
-    ) V4Router(_pm) Ownable(_hook) {
-        s_lpm = _lpm;
-        s_permit2 = _permit2;
+    ) PoolModifyLiquidity(_pm) V4Router(_pm) Ownable(_hook) {
         s_safeToken = _safeToken;
     }
 
-    function depositPosition(
-        PoolKey calldata _key,
-        uint256 _tokenId,
-        address _owner
-    ) external payable onlyOwner {
-        IERC721(address(s_lpm)).safeTransferFrom(
+    function mint(
+        PoolKey calldata _poolKey,
+        IPoolManager.ModifyLiquidityParams memory _params,
+        address _owner,
+        uint256 _amount0Desired,
+        uint256 _amount1Desired
+    ) external returns (uint256 tokenId) {
+        IERC20(Currency.unwrap(_poolKey.currency0)).transferFrom(
             msg.sender,
             address(this),
-            _tokenId,
-            abi.encode(CallData({key: _key, owner: _owner}))
+            _amount0Desired
         );
-    }
+        IERC20(Currency.unwrap(_poolKey.currency1)).transferFrom(
+            msg.sender,
+            address(this),
+            _amount1Desired
+        );
 
-    function onERC721Received(
-        address _operator,
-        address _from,
-        uint256 _tokenId,
-        bytes calldata _data
-    ) external returns (bytes4) {
-        // Check if the sender is the hook
-        if (msg.sender != address(s_lpm)) revert InvalidPositionManager();
-        if (_from != owner()) revert InvalidHook();
-        if (_operator != address(this)) revert InvalidSelf();
+        IERC20(Currency.unwrap(_poolKey.currency0)).approve(
+            address(poolManager),
+            _amount0Desired
+        );
+        IERC20(Currency.unwrap(_poolKey.currency1)).approve(
+            address(poolManager),
+            _amount1Desired
+        );
 
-        CallData memory data = abi.decode(_data, (CallData));
-        s_postions[_tokenId] = Position(data.key, data.owner, _tokenId);
-        s_poolKeys[data.key.toId()] = data.key;
-
-        return this.onERC721Received.selector;
-    }
-
-    function mint() external {
-        // @todo
+        tokenId = nextTokenId;
+        s_poolKeys[_poolKey.toId()] = _poolKey;
+        mintAndAddLiquidity(_poolKey, _params, _owner, bytes(""));
     }
 
     function addLiquidity(
-        PoolKey memory _key,
+        PoolKey memory _poolKey,
         uint256 _tokenId,
-        uint256 _amount0,
-        uint256 _amount1,
-        uint256 _deadline
+        address _owner,
+        uint256 _amount0Desired,
+        uint256 _amount1Desired
     ) external onlyOwner {
-        IERC20(Currency.unwrap(_key.currency0)).transferFrom(
+        IERC20(Currency.unwrap(_poolKey.currency0)).transferFrom(
             msg.sender,
             address(this),
-            _amount0
+            _amount0Desired
         );
-        IERC20(Currency.unwrap(_key.currency1)).transferFrom(
+        IERC20(Currency.unwrap(_poolKey.currency1)).transferFrom(
             msg.sender,
             address(this),
-            _amount1
+            _amount1Desired
         );
 
-        _approvePosmCurrency(_key.currency0, _amount0);
-        _approvePosmCurrency(_key.currency1, _amount1);
-        Plan memory planner = Planner.init();
-        (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(_key.toId());
-        (, PositionInfo info) = s_lpm.getPoolAndPositionInfo(_tokenId);
+        IERC20(Currency.unwrap(_poolKey.currency0)).approve(
+            address(poolManager),
+            _amount0Desired
+        );
+        IERC20(Currency.unwrap(_poolKey.currency1)).approve(
+            address(poolManager),
+            _amount1Desired
+        );
+
+        PositionInfo memory info = positionInfo[_tokenId];
+        s_poolKeys[_poolKey.toId()] = _poolKey;
+
+        (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(_poolKey.toId());
         uint128 newLiquidity = LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96,
-            TickMath.getSqrtPriceAtTick(info.tickLower()),
-            TickMath.getSqrtPriceAtTick(info.tickUpper()),
-            _amount0,
-            _amount1
+            TickMath.getSqrtPriceAtTick(info.tickLower),
+            TickMath.getSqrtPriceAtTick(info.tickUpper),
+            _amount0Desired,
+            _amount1Desired
         );
-        planner.add(
-            Actions.INCREASE_LIQUIDITY,
-            // @todo should inform maxAmount0 and maxAmount1 to prevent slippage
-            abi.encode(_tokenId, newLiquidity, _amount0, _amount1, ZERO_BYTES)
+        modifyLiquidity(
+            _poolKey,
+            IPoolManager.ModifyLiquidityParams({
+                tickLower: info.tickLower,
+                tickUpper: info.tickUpper,
+                liquidityDelta: int256(uint256(newLiquidity)),
+                salt: bytes32("")
+            }),
+            _tokenId,
+            _owner,
+            bytes("")
         );
-        planner.finalizeModifyLiquidityWithClose(_key);
-
-        bytes memory actions = planner.encode();
-
-        s_lpm.modifyLiquidities(actions, _deadline);
     }
 
     function removeLiquidity(
-        PoolKey memory _key,
+        PoolKey memory _poolKey,
         uint256 _tokenId,
         uint128 _percentage,
-        uint256 _deadline
-    ) external onlyOwner {
+        address _owner
+    ) external onlyOwner returns (uint256 amount0, uint256 amount1) {
+        PositionInfo memory position = positionInfo[_tokenId];
+        require(position.owner == _owner, "Invalid owner");
         require(_percentage > 0 && _percentage <= 100e4, "Invalid percentage");
 
-        (uint256 amount0, uint256 amount1) = _removeLiquidity(
-            _key,
+        (amount0, amount1) = _removeLiquidity(
+            _poolKey,
             _tokenId,
             _percentage,
-            _deadline,
             false
         );
-
-        Position memory position = s_postions[_tokenId];
-
-        _key.currency0.transfer(position.owner, amount0);
-        _key.currency1.transfer(position.owner, amount1);
+        _poolKey.currency0.transfer(_owner, amount0);
+        _poolKey.currency1.transfer(_owner, amount1);
     }
 
     function collectFees(
-        PoolKey memory _key,
+        PoolKey memory _poolKey,
         uint256 _tokenId,
-        uint256 _deadline
-    ) external onlyOwner {
-        uint256 beforeBalance0 = _key.currency0.balanceOfSelf();
-        uint256 beforeBalance1 = _key.currency1.balanceOfSelf();
+        address _owner
+    ) external onlyOwner returns (uint256 fees0, uint256 fees1) {
+        PositionInfo memory position = positionInfo[_tokenId];
+        require(position.owner == _owner, "Invalid owner");
+        uint256 beforeBalance0 = _poolKey.currency0.balanceOfSelf();
+        uint256 beforeBalance1 = _poolKey.currency1.balanceOfSelf();
 
-        Plan memory planner = Planner.init();
-        planner.add(
-            Actions.DECREASE_LIQUIDITY,
-            abi.encode(_tokenId, 0, 0, 0, ZERO_BYTES)
-        );
-        planner.finalizeModifyLiquidityWithClose(_key);
+        _removeLiquidity(_poolKey, _tokenId, 100e4, false);
 
-        bytes memory actions = planner.encode();
+        uint256 afterBalance0 = _poolKey.currency0.balanceOfSelf();
+        uint256 afterBalance1 = _poolKey.currency1.balanceOfSelf();
 
-        s_lpm.modifyLiquidities(actions, _deadline);
-        uint256 afterBalance0 = _key.currency0.balanceOfSelf();
-        uint256 afterBalance1 = _key.currency1.balanceOfSelf();
-
-        uint256 fees0 = afterBalance0 - beforeBalance0;
-        uint256 fees1 = afterBalance1 - beforeBalance1;
-
-        Position memory position = s_postions[_tokenId];
-        _key.currency0.transfer(position.owner, fees0);
-        _key.currency1.transfer(position.owner, fees1);
+        fees0 = afterBalance0 - beforeBalance0;
+        fees1 = afterBalance1 - beforeBalance1;
+        _poolKey.currency0.transfer(_owner, fees0);
+        _poolKey.currency1.transfer(_owner, fees1);
     }
 
     function removeLiquidityInBatch(
-        PoolId poolId,
-        uint256[] calldata _tokenIds
+        PoolId,
+        uint256[] calldata _tokenIds,
+        bool _withoutUnlock
     ) external {
         uint256 tokenIdsLength = _tokenIds.length;
         require(tokenIdsLength <= 500, "Too many tokenIds");
-        PoolKey memory poolKey = s_poolKeys[poolId];
         for (uint256 i = 0; i < tokenIdsLength; i++) {
             uint256 tonekId = _tokenIds[i];
+            PoolKey memory poolKey = positionInfo[tonekId].key;
+
             (uint256 amount0, uint256 amount1) = _removeLiquidity(
                 poolKey,
                 tonekId,
                 99e4, // 99%
-                0,
-                true
+                _withoutUnlock
             );
             _swapToSafeToken(
                 poolKey.currency0,
@@ -254,21 +227,18 @@ contract PoolVaultManager is V4Router, Ownable {
         uint256 length = _tokenIds.length;
         require(length <= 500, "Too many tokenIds");
         totalSupplies = new PositionTotalSupply[](length);
-
         for (uint256 i = 0; i < length; i++) {
             uint256 tokenId = _tokenIds[i];
-            uint128 liquidity = s_lpm.getPositionLiquidity(tokenId);
+            uint128 liquidity = _getLiquidity(tokenId);
             (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(_key.toId());
-            (, PositionInfo info) = s_lpm.getPoolAndPositionInfo(tokenId);
-
+            (, PositionInfo memory info) = getPoolAndPositionInfo(tokenId);
             (uint256 amount0, uint256 amount1) = LiquidityAmounts
                 .getAmountsForLiquidity(
                     sqrtPriceX96,
-                    TickMath.getSqrtPriceAtTick(info.tickLower()),
-                    TickMath.getSqrtPriceAtTick(info.tickUpper()),
+                    TickMath.getSqrtPriceAtTick(info.tickLower),
+                    TickMath.getSqrtPriceAtTick(info.tickUpper),
                     liquidity
                 );
-
             totalSupplies[i] = PositionTotalSupply(
                 _key,
                 tokenId,
@@ -276,6 +246,27 @@ contract PoolVaultManager is V4Router, Ownable {
                 amount1
             );
         }
+    }
+
+    function getPoolAndPositionInfo(
+        uint256 _tokenId
+    ) public view returns (PoolKey memory poolKey, PositionInfo memory info) {
+        info = positionInfo[_tokenId];
+        poolKey = info.key;
+    }
+
+    function getPositionLiquidity(
+        uint256 _tokenId
+    ) external view returns (uint128 liquidity) {
+        liquidity = _getLiquidity(_tokenId);
+    }
+
+    function ownerOf(uint256 _tokenId) external view returns (address owner) {
+        owner = positionInfo[_tokenId].owner;
+    }
+
+    function msgSender() public view virtual override returns (address) {
+        return address(this);
     }
 
     // implementation of abstract function DeltaResolver._pay
@@ -296,65 +287,54 @@ contract PoolVaultManager is V4Router, Ownable {
         }
     }
 
-    function msgSender() public view virtual override returns (address) {
-        return address(this);
-    }
-
-    function _approvePosmCurrency(Currency _currency, uint256 _amount) private {
-        // Because POSM uses permit2, we must execute 2 permits/approvals.
-        // 1. First, the caller must approve permit2 on the token.
-        IERC20(Currency.unwrap(_currency)).approve(address(s_permit2), _amount);
-        // 2. Then, the caller must approve POSM as a spender of permit2. TODO: This could also be a signature.
-        s_permit2.approve(
-            Currency.unwrap(_currency),
-            address(s_lpm),
-            uint160(_amount),
-            type(uint48).max
-        );
-    }
-
     function _removeLiquidity(
         PoolKey memory _key,
         uint256 _tokenId,
         uint128 _percentage,
-        uint256 _deadline,
         bool _withoutUnlock
     ) private returns (uint256 amount0, uint256 amount1) {
-        uint128 liquidity = s_lpm.getPositionLiquidity(_tokenId);
+        (, PositionInfo memory info) = getPoolAndPositionInfo(_tokenId);
+        uint128 liquidity = _getLiquidity(_tokenId);
         (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(_key.toId());
         uint128 liquidityToRemove = uint128((liquidity * _percentage) / 100e4);
-        (, PositionInfo info) = s_lpm.getPoolAndPositionInfo(_tokenId);
-
         (amount0, amount1) = LiquidityAmounts.getAmountsForLiquidity(
             sqrtPriceX96,
-            TickMath.getSqrtPriceAtTick(info.tickLower()),
-            TickMath.getSqrtPriceAtTick(info.tickUpper()),
+            TickMath.getSqrtPriceAtTick(info.tickLower),
+            TickMath.getSqrtPriceAtTick(info.tickUpper),
             liquidityToRemove
         );
-        Plan memory planner = Planner.init();
-        planner.add(
-            Actions.DECREASE_LIQUIDITY,
-            // @todo should inform minAmount0 and minAmount1 to prevent slippage
-            abi.encode(_tokenId, liquidityToRemove, 0, 0, ZERO_BYTES)
-        );
-        planner.finalizeModifyLiquidityWithClose(_key);
-
-        bytes memory plan = planner.encode();
         if (_withoutUnlock) {
-            (bytes memory actions, bytes[] memory params) = abi.decode(
-                plan,
-                (bytes, bytes[])
+            modifyLiquidityWithoutUnlock(
+                _key,
+                IPoolManager.ModifyLiquidityParams({
+                    tickLower: info.tickLower,
+                    tickUpper: info.tickUpper,
+                    liquidityDelta: -int256(uint256(liquidityToRemove)),
+                    salt: bytes32(_tokenId)
+                }),
+                _tokenId,
+                info.owner,
+                bytes("")
             );
-
-            s_lpm.modifyLiquiditiesWithoutUnlock(actions, params);
-        } else {
-            s_lpm.modifyLiquidities(plan, _deadline);
+            return (amount0, amount1);
         }
+        modifyLiquidity(
+            _key,
+            IPoolManager.ModifyLiquidityParams({
+                tickLower: info.tickLower,
+                tickUpper: info.tickUpper,
+                liquidityDelta: -int256(uint256(liquidityToRemove)),
+                salt: bytes32(_tokenId)
+            }),
+            _tokenId,
+            info.owner,
+            bytes("")
+        );
     }
 
     function _swapToSafeToken(
         Currency _currencyIn,
-        uint256 _tokenId,
+        uint256,
         uint256 _amountIn,
         address _recipient
     ) private {
@@ -366,9 +346,7 @@ contract PoolVaultManager is V4Router, Ownable {
             3000,
             60
         );
-
-        bool zeroForOne = true;
-
+        bool zeroForOne = poolKeyCurrencyToUSDC.currency0 == _currencyIn;
         IERC20(Currency.unwrap(_currencyIn)).approve(
             address(poolManager),
             _amountIn
@@ -382,21 +360,30 @@ contract PoolVaultManager is V4Router, Ownable {
                 0, // amountOutMinimum should not be zero in production to prevent slippage
                 bytes("")
             );
-
         Plan memory planner = Planner.init();
         planner.add(Actions.SWAP_EXACT_IN_SINGLE, abi.encode(params));
-
         bytes memory data = planner.finalizeSwap(
             _currencyIn,
             s_safeToken,
             _recipient
         );
+        _executeActions(abi.encode(CallbackUnlockData(false, data)));
+    }
 
-        (bytes memory actions, bytes[] memory _params) = abi.decode(
-            data,
-            (bytes, bytes[])
-        );
-        _executeActionsWithoutUnlock(actions, _params);
+    function unlockCallback(
+        bytes calldata data
+    ) external onlyPoolManager returns (bytes memory) {
+        CallbackUnlockData memory _data = abi.decode(data, (CallbackUnlockData));
+        if (!_data.modifyLiquidity) {
+            return _unlockCallbackSwapRouter(_data.unlockData);
+        }
+        return _unlockCallbackModifyLiquidity(_data.unlockData);
+    }
+
+    function _getLiquidity(
+        uint256 tokenId
+    ) internal view returns (uint128 liquidity) {
+        liquidity = uint128(positionInfo[tokenId].liquidity);
     }
 
     function _poolKeyUnsorted(
