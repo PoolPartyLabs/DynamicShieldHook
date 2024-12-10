@@ -30,7 +30,7 @@ We welcome contributions to enhance the **DynamicShield Hook**. Please open issu
 
 ## License  
 
-This project is licensed under the Business Source License 1.1 (BUSL-1.1). See the [LICENSE](LICENSE) file for details.  
+This project is licensed under the MIT License (MIT). 
 
 ---
 
